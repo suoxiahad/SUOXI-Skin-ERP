@@ -1,0 +1,6 @@
+{
+  "name": "SUOXI Skin Care & Aesthetic Center CRM",
+  "description": "Clinic operations and CRM platform for SUOXI Skin Care & Aesthetic Center in Dhaka, Bangladesh with appointment booking, clinical consultations, prescriptions, billing, packages, inventory, and call center tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

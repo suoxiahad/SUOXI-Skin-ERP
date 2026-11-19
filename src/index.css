@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+@layer base {
+  :root {
+    --brand-primary: #0DA54F;
+    --brand-primary-dark: #0a8740;
+    --brand-primary-light: #e6f6ee;
+    --brand-secondary: #F06E84;
+    --brand-secondary-light: #fef0f2;
+    --bg-page: #F5F7FA;
+    --card-surface: #FFFFFF;
+    --text-primary: #1F2937;
+    --text-secondary: #64748B;
+    --border-default: #E2E8F0;
+    --glass-bg: rgba(255, 255, 255, 0.78);
+    --glass-border: rgba(255, 255, 255, 0.85);
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', 'Inter', 'Noto Sans Bengali', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+  }
+}
+
+/* All numbers, codes, BDT currency, tokens, and identifiers use tabular numerals */
+.font-mono,
+code,
+pre,
+kbd,
+samp {
+  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-feature-settings: 'tnum' 1, 'cv05' 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.font-bengali {
+  font-family: 'Noto Sans Bengali', 'Plus Jakarta Sans', sans-serif;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smooth GPU-composited motion primitives */
+@keyframes suoxiFadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes suoxiDrawerSlideIn {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes suoxiPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-suoxi-enter {
+  animation: suoxiFadeSlideUp 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-suoxi-drawer {
+  animation: suoxiDrawerSlideIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-suoxi-pop {
+  animation: suoxiPopIn 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-suoxi-enter,
+  .animate-suoxi-drawer,
+  .animate-suoxi-pop {
+    animation: none !important;
+  }
+}
+
+/* Glassmorphism subtle enhancement */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+}
+
+.glass-nav {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.glass-card-kpi {
+  background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(245,247,250,0.85) 100%);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+}
+
+/* Print Styles for Prescriptions & Invoices */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+  html,
+  body {
+    background: white !important;
+    color: black !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-modal-root {
+    position: static !important;
+    inset: auto !important;
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    height: auto !important;
+  }
+  .print-page {
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .page-break-before {
+    page-break-before: always !important;
+    break-before: page !important;
+    border-top: none !important;
+  }
+}

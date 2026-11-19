@@ -1,0 +1,58 @@
+{
+  "name": "suoxi-crm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts",
+    "dev:api": "npm --prefix apps/api run start",
+    "dev:web": "npm --prefix apps/web run dev -- --port 3000",
+    "dev:worker": "npm --prefix apps/worker run start",
+    "build": "vite build",
+    "build:web": "npm --prefix apps/web run build",
+    "lint": "tsc --noEmit",
+    "typecheck": "npm --prefix packages/shared-types run typecheck && npm --prefix apps/web run typecheck && npm --prefix apps/worker run typecheck && npm --prefix apps/api run typecheck",
+    "test:api": "npm --prefix apps/api run test",
+    "pg:migrate": "tsx server/db/migrate.ts",
+    "pg:status": "tsx server/db/migrate.ts --status",
+    "pg:seed": "tsx server/db/seedDefaults.ts",
+    "pg:import-patients": "tsx server/db/importPatients.ts",
+    "migrate:plan": "npm --prefix apps/api run migrate:plan",
+    "migrate:up": "npm --prefix apps/api run migrate:up"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "argon2": "^0.45.2",
+    "bullmq": "^6.7.8",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "ioredis": "^6.0.0",
+    "lucide-react": "^1.74.0",
+    "multer": "^2.5.0",
+    "mysql2": "^3.24.6",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "recharts": "^3.11.0",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8",
+    "zod": "^4.6.7"
+  }
+}

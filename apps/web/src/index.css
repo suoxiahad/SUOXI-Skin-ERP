@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/**
+ * SUOXI Skin Care & Aesthetic Center CRM (Dhaka, Bangladesh)
+ * Central Design Tokens & K2 Glassmorphism Theme
+ * Rule: Centralize all brand tokens here. No hardcoded hex values outside this file.
+ */
+
+:root {
+  /* Brand Tokens */
+  --brand-primary: #0DA54F;
+  --brand-primary-dark: #0a8740;
+  --brand-primary-light: #e6f6ee;
+  --brand-secondary: #F06E84;
+  --brand-secondary-light: #fef0f2;
+  --bg-page: #F5F7FA;
+  --card-surface: #FFFFFF;
+  --text-primary: #1F2937;
+  --text-secondary: #64748B;
+  --border-default: #E2E8F0;
+
+  /* Glass Surface Tokens */
+  --glass-surface: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.85);
+  --glass-sidebar: rgba(255, 255, 255, 0.82);
+  --glass-topbar: rgba(255, 255, 255, 0.88);
+  --focus-ring: rgba(13, 165, 79, 0.35);
+
+  /* Status Colors */
+  --status-blue: #2563EB;
+  --status-blue-bg: #EFF6FF;
+  --status-green: #0DA54F;
+  --status-green-bg: #E6F6EE;
+  --status-amber: #D97706;
+  --status-amber-bg: #FFFBEB;
+  --status-red: #DC2626;
+  --status-red-bg: #FEF2F2;
+  --status-grey: #6B7280;
+  --status-grey-bg: #F3F4F6;
+}
+
+body {
+  font-family: 'Inter', 'Noto Sans Bengali', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular Numerals for Currency & Clinical Quantities */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Accessible Focus Rings */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
+
+/* Glassmorphism & Solid Fallback Styles */
+.glass-panel {
+  background-color: var(--card-surface);
+  border: 1px solid var(--border-default);
+}
+@supports (backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px)) {
+  .glass-panel {
+    background-color: var(--glass-surface);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-color: var(--glass-border);
+  }
+}
+
+.glass-sidebar {
+  background-color: var(--card-surface);
+  border-right: 1px solid var(--border-default);
+}
+@supports (backdrop-filter: blur(16px)) or (-webkit-backdrop-filter: blur(16px)) {
+  .glass-sidebar {
+    background-color: var(--glass-sidebar);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border-color: var(--glass-border);
+  }
+}
+
+.glass-topbar {
+  background-color: var(--card-surface);
+  border-bottom: 1px solid var(--border-default);
+}
+@supports (backdrop-filter: blur(14px)) or (-webkit-backdrop-filter: blur(14px)) {
+  .glass-topbar {
+    background-color: var(--glass-topbar);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    border-color: var(--glass-border);
+  }
+}
+
+.glass-modal {
+  background-color: var(--card-surface);
+  border: 1px solid var(--border-default);
+}
+@supports (backdrop-filter: blur(20px)) or (-webkit-backdrop-filter: blur(20px)) {
+  .glass-modal {
+    background-color: rgba(255, 255, 255, 0.92);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border-color: var(--glass-border);
+  }
+}
+
+/* Solid card for clinical content, forms, and tables */
+.solid-card {
+  background-color: var(--card-surface);
+  border: 1px solid var(--border-default);
+}
+
+/* Theme Utility Classes */
+.bg-brand-primary { background-color: var(--brand-primary); }
+.bg-brand-primary-dark { background-color: var(--brand-primary-dark); }
+.bg-brand-primary-light { background-color: var(--brand-primary-light); }
+.text-brand-primary { color: var(--brand-primary); }
+.text-brand-primary-dark { color: var(--brand-primary-dark); }
+.border-brand-primary { border-color: var(--brand-primary); }
+
+.bg-brand-secondary { background-color: var(--brand-secondary); }
+.bg-brand-secondary-light { background-color: var(--brand-secondary-light); }
+.text-brand-secondary { color: var(--brand-secondary); }
+
+.bg-brand-page { background-color: var(--bg-page); }
+.bg-brand-card { background-color: var(--card-surface); }
+.text-brand-text { color: var(--text-primary); }
+.text-brand-muted { color: var(--text-secondary); }
+.border-brand-border { border-color: var(--border-default); }
+
+/* Status Classes */
+.badge-status-blue { background-color: var(--status-blue-bg); color: var(--status-blue); border: 1px solid rgba(37, 99, 235, 0.2); }
+.badge-status-green { background-color: var(--status-green-bg); color: var(--status-green); border: 1px solid rgba(13, 165, 79, 0.2); }
+.badge-status-amber { background-color: var(--status-amber-bg); color: var(--status-amber); border: 1px solid rgba(217, 119, 6, 0.2); }
+.badge-status-red { background-color: var(--status-red-bg); color: var(--status-red); border: 1px solid rgba(220, 38, 38, 0.2); }
+.badge-status-grey { background-color: var(--status-grey-bg); color: var(--status-grey); border: 1px solid rgba(107, 114, 128, 0.2); }

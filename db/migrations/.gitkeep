@@ -1,0 +1,4 @@
+-- SUOXI CRM Database Migrations Directory
+-- SCHEMA GATE: No schema has been supplied yet.
+-- Rule 11 strictly prohibits inventing or assuming MySQL 8 tables, columns, or DDL.
+-- Migrations will be populated only after formal schema verification.

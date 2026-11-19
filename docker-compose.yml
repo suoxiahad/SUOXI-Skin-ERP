@@ -1,0 +1,32 @@
+# Docker Compose definition for SUOXI CRM Local Development
+# Dev-only credentials: must be replaced in production environments.
+# Note: Host port 3308 maps to container port 3306 to prevent host port collisions.
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: suoxi_mysql_dev
+    restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=caching_sha2_password
+      --innodb-buffer-pool-size=256M
+    environment:
+      MYSQL_DATABASE: suoxi_crm
+      MYSQL_ROOT_PASSWORD: suoxi_root_dev_password_only
+      MYSQL_USER: suoxi_dev_user
+      MYSQL_PASSWORD: suoxi_dev_password_only
+    ports:
+      - "3308:3306"
+    volumes:
+      - suoxi_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psuoxi_root_dev_password_only"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  suoxi_mysql_data:
+    driver: local
