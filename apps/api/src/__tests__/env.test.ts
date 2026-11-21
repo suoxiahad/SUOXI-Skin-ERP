@@ -9,7 +9,7 @@ export async function runEnvTests(): Promise<void> {
     PORT: '4000',
     NODE_ENV: 'test',
     DB_HOST: '127.0.0.1',
-    DB_PORT: '3306',
+    DB_PORT: '5432',
     DB_NAME: 'suoxi_crm_test',
   });
 
@@ -36,7 +36,7 @@ export async function runEnvTests(): Promise<void> {
   const sensitiveConfig = parseConfig({
     PORT: '3001',
     DB_PASSWORD: 'super_secret_database_password_123',
-    DATABASE_URL: 'mysql://user:super_secret_pw@localhost:3308/db',
+    DATABASE_URL: 'postgresql://user:super_secret_pw@localhost:5432/db',
     JWT_SECRET: 'a_long_super_secret_key_that_is_32_characters_minimum',
     SMS_GATEWAY_API_KEY: 'sms_secret_gateway_key_999',
   });

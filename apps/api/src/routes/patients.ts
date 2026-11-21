@@ -547,7 +547,7 @@ patientsRouter.post(
       const result = await portalService.createPortalAccount(
         req.params.id,
         req.body?.loginIdentifier,
-        { id: req.user!.id }
+        { id: req.accessContext?.userId || 'usr-system' }
       );
 
       res.status(201).json({
@@ -576,7 +576,7 @@ patientsRouter.post(
         req.params.id,
         tokenType,
         channel,
-        { id: req.user!.id }
+        { id: req.accessContext?.userId || 'usr-system' }
       );
 
       res.status(200).json({
@@ -598,7 +598,7 @@ patientsRouter.post(
   requirePermission('portal.manage'),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await portalService.deactivateAccount(req.params.id, { id: req.user!.id });
+      await portalService.deactivateAccount(req.params.id, { id: req.accessContext?.userId || 'usr-system' });
       res.status(200).json({
         data: { success: true, message: 'Portal account deactivated' },
         meta: { requestId: req.id, timestamp: new Date().toISOString() },

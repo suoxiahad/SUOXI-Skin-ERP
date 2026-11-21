@@ -1,14 +1,11 @@
-import type { Pool, PoolConnection } from 'mysql2/promise';
+import type { Pool, PoolClient } from 'pg';
 import { getDbPool } from './pool.js';
 import { logger } from '../logger/logger.js';
 
-export const RETRYABLE_MYSQL_ERROR_CODES = new Set([
-  '1213',
-  1213,
-  'ER_LOCK_DEADLOCK',
-  '1205',
-  1205,
-  'ER_LOCK_WAIT_TIMEOUT',
+export const RETRYABLE_PG_ERROR_CODES = new Set([
+  '40P01', // deadlock_detected
+  '40001', // serialization_failure
+  '55P03', // lock_not_available
 ]);
 
 export interface TransactionOptions {
@@ -21,11 +18,7 @@ export interface TransactionOptions {
 export function isRetryableError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const anyErr = err as Record<string, unknown>;
-
-  if (anyErr.errno && RETRYABLE_MYSQL_ERROR_CODES.has(anyErr.errno as string | number)) {
-    return true;
-  }
-  if (anyErr.code && RETRYABLE_MYSQL_ERROR_CODES.has(anyErr.code as string | number)) {
+  if (typeof anyErr.code === 'string' && RETRYABLE_PG_ERROR_CODES.has(anyErr.code)) {
     return true;
   }
   return false;
@@ -36,15 +29,11 @@ export async function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Executes operations inside a database transaction with automatic retry
- * on MySQL deadlock (ER_LOCK_DEADLOCK 1213) and lock wait timeout (ER_LOCK_WAIT_TIMEOUT 1205).
- * 
- * Consistent Lock Order Principle:
- * Callers must always acquire locks on entities in a globally consistent order
- * (e.g., patient -> invoice -> payment -> stock_item) to minimize deadlocks.
+ * Executes operations inside a PostgreSQL ACID transaction with automatic retry
+ * on PostgreSQL deadlock (40P01), serialization failure (40001), and lock timeout (55P03).
  */
 export async function withTransaction<T>(
-  action: (conn: PoolConnection) => Promise<T>,
+  action: (client: PoolClient) => Promise<T>,
   options: TransactionOptions = {}
 ): Promise<T> {
   const maxRetries = options.maxRetries ?? 3;
@@ -55,19 +44,19 @@ export async function withTransaction<T>(
   let attempt = 0;
 
   while (attempt <= maxRetries) {
-    const conn = await pool.getConnection();
+    const client = await pool.connect();
     try {
-      await conn.beginTransaction();
+      await client.query('BEGIN');
 
-      const result = await action(conn);
+      const result = await action(client);
 
-      await conn.commit();
+      await client.query('COMMIT');
       return result;
     } catch (err: unknown) {
       try {
-        await conn.rollback();
+        await client.query('ROLLBACK');
       } catch (rollbackErr) {
-        logger.warn({ rollbackErr }, 'Error during transaction rollback');
+        logger.warn({ rollbackErr }, 'Error during PostgreSQL transaction rollback');
       }
 
       if (isRetryableError(err) && attempt < maxRetries) {
@@ -77,7 +66,7 @@ export async function withTransaction<T>(
 
         logger.warn(
           { attempt, maxRetries, delayMs: Math.round(delay), err },
-          'Deadlock or lock wait timeout encountered. Retrying transaction...'
+          'PostgreSQL deadlock or serialization conflict encountered. Retrying transaction...'
         );
 
         await sleep(delay);
@@ -86,7 +75,7 @@ export async function withTransaction<T>(
 
       throw err;
     } finally {
-      conn.release();
+      client.release();
     }
   }
 

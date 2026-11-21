@@ -242,7 +242,10 @@ export const pgPatientClinicalRepo = {
     return res.rows.map(mapPatientRow);
   },
 
-  async findPatientByIdentifier(idOrCode: string): Promise<Patient | null> {
+  async findPatientByIdentifier(
+    idOrCode: string,
+    client?: { query: typeof pgQuery }
+  ): Promise<Patient | null> {
     const norm = (idOrCode || '').trim();
     if (!norm) return null;
     const alt = norm.startsWith('pat-')
@@ -250,7 +253,8 @@ export const pgPatientClinicalRepo = {
       : norm.startsWith('pt-')
       ? norm.replace('pt-', 'pat-')
       : norm;
-    const res = await pgQuery(
+    const exec = client ? client.query.bind(client) : pgQuery;
+    const res = await exec(
       `
       SELECT * FROM patients
       WHERE id = $1 OR id = $2 OR LOWER(patient_id_code) = LOWER($1)
@@ -354,7 +358,7 @@ export const pgPatientClinicalRepo = {
     ipAddress: string
   ): Promise<Patient | null> {
     return withPgTransaction(async (client) => {
-      const existing = await this.findPatientByIdentifier(idOrCode);
+      const existing = await this.findPatientByIdentifier(idOrCode, client);
       if (!existing) return null;
 
       let normalizedPhone = existing.phone;
@@ -525,7 +529,7 @@ export const pgPatientClinicalRepo = {
       raw.booking_method || raw.bookingMethod ? String(raw.booking_method || raw.bookingMethod) : null;
 
     return withPgTransaction(async (client) => {
-      const pt = await this.findPatientByIdentifier(patientId);
+      const pt = await this.findPatientByIdentifier(patientId, client);
       if (!pt) {
         const err = new Error('Patient not found') as Error & { statusCode?: number };
         err.statusCode = 404;
@@ -555,48 +559,70 @@ export const pgPatientClinicalRepo = {
         .join(' | ');
 
       const id = `apt-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
-      const res = await client.query(
+      let res;
+      try {
+        res = await client.query(
+          `
+          INSERT INTO appointments (
+            id, patient_id, patient_name, patient_phone, patient_age, patient_gender,
+            patient_address, patient_blood_group, branch_id, branch_name, doctor_id,
+            doctor_name, disease_name, booking_method, service_category, service_name,
+            appointment_date, appointment_time, duration_minutes, status, call_reference,
+            notes, created_by, created_at, updated_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10, $11,
+            $12, $13, $14, $15, $16,
+            $17::date, $18, $19, 'confirmed', $20,
+            $21, $22, NOW(), NOW()
+          )
+          RETURNING *
+          `,
+          [
+            id,
+            pt.id,
+            pt.name,
+            pt.phone,
+            pt.age ?? null,
+            pt.gender || null,
+            pt.address || pt.city || 'Dhaka',
+            pt.bloodGroup || null,
+            branch.id,
+            branch.name,
+            doctorId,
+            doctorName,
+            diseaseName,
+            bookingMethod,
+            serviceCategory,
+            serviceName,
+            appointmentDate,
+            appointmentTime,
+            durationMinutes,
+            String(raw.call_reference || raw.callReference || bookingMethod || ''),
+            notesWithMeta || null,
+            actor.id,
+          ]
+        );
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string; constraint?: string };
+        if (pgErr?.code === '23505') {
+          const conflictErr = new Error(
+            `Doctor ${doctorName} already has an active appointment on ${appointmentDate} at ${appointmentTime}`
+          ) as Error & { statusCode?: number; code?: string };
+          conflictErr.statusCode = 409;
+          conflictErr.code = 'SLOT_CONFLICT';
+          throw conflictErr;
+        }
+        throw err;
+      }
+
+      await client.query(
         `
-        INSERT INTO appointments (
-          id, patient_id, patient_name, patient_phone, patient_age, patient_gender,
-          patient_address, patient_blood_group, branch_id, branch_name, doctor_id,
-          doctor_name, disease_name, booking_method, service_category, service_name,
-          appointment_date, appointment_time, duration_minutes, status, call_reference,
-          notes, created_by, created_at, updated_at
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11,
-          $12, $13, $14, $15, $16,
-          $17::date, $18, $19, 'confirmed', $20,
-          $21, $22, NOW(), NOW()
-        )
-        RETURNING *
+        INSERT INTO appointment_status_history (id, appointment_id, from_status, to_status, reason, changed_by, changed_by_name)
+        VALUES ($1, $2, NULL, 'confirmed', 'Initial booking', $3, $4)
         `,
-        [
-          id,
-          pt.id,
-          pt.name,
-          pt.phone,
-          pt.age ?? null,
-          pt.gender || null,
-          pt.address || pt.city || 'Dhaka',
-          pt.bloodGroup || null,
-          branch.id,
-          branch.name,
-          doctorId,
-          doctorName,
-          diseaseName,
-          bookingMethod,
-          serviceCategory,
-          serviceName,
-          appointmentDate,
-          appointmentTime,
-          durationMinutes,
-          String(raw.call_reference || raw.callReference || bookingMethod || ''),
-          notesWithMeta || null,
-          actor.id,
-        ]
+        [`ash-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`, id, actor.id, actor.name]
       );
 
       const created = mapAppointmentRow(res.rows[0]);
@@ -624,37 +650,52 @@ export const pgPatientClinicalRepo = {
       if (existingRes.rows.length === 0) return null;
       const cur = mapAppointmentRow(existingRes.rows[0]);
 
-      const res = await client.query(
-        `
-        UPDATE appointments SET
-          doctor_id = $2,
-          doctor_name = $3,
-          service_category = $4,
-          service_name = $5,
-          appointment_date = $6::date,
-          appointment_time = $7,
-          duration_minutes = $8,
-          status = $9,
-          status_reason = $10,
-          notes = $11,
-          updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-        `,
-        [
-          id,
-          String(patch.provider_id || patch.doctorId || cur.doctorId),
-          String(patch.provider_name || patch.doctorName || cur.doctorName),
-          String(patch.service_category || patch.serviceCategory || cur.serviceCategory),
-          String(patch.service_name || patch.serviceName || cur.serviceName),
-          String(patch.appointment_date || patch.appointmentDate || cur.appointmentDate),
-          String(patch.start_time || patch.appointmentTime || cur.appointmentTime),
-          toNumber(patch.duration_minutes || patch.durationMinutes, cur.durationMinutes),
-          String(patch.status || cur.status),
-          patch.statusReason !== undefined ? String(patch.statusReason) : cur.statusReason || null,
-          patch.notes !== undefined ? String(patch.notes) : cur.notes || null,
-        ]
-      );
+      let res;
+      try {
+        res = await client.query(
+          `
+          UPDATE appointments SET
+            doctor_id = $2,
+            doctor_name = $3,
+            service_category = $4,
+            service_name = $5,
+            appointment_date = $6::date,
+            appointment_time = $7,
+            duration_minutes = $8,
+            status = $9,
+            status_reason = $10,
+            notes = $11,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+          `,
+          [
+            id,
+            String(patch.provider_id || patch.doctorId || cur.doctorId),
+            String(patch.provider_name || patch.doctorName || cur.doctorName),
+            String(patch.service_category || patch.serviceCategory || cur.serviceCategory),
+            String(patch.service_name || patch.serviceName || cur.serviceName),
+            String(patch.appointment_date || patch.appointmentDate || cur.appointmentDate),
+            String(patch.start_time || patch.appointmentTime || cur.appointmentTime),
+            toNumber(patch.duration_minutes || patch.durationMinutes, cur.durationMinutes),
+            String(patch.status || cur.status),
+            patch.statusReason !== undefined ? String(patch.statusReason) : cur.statusReason || null,
+            patch.notes !== undefined ? String(patch.notes) : cur.notes || null,
+          ]
+        );
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string };
+        if (pgErr?.code === '23505') {
+          const conflictErr = new Error('Selected doctor slot is already booked') as Error & {
+            statusCode?: number;
+            code?: string;
+          };
+          conflictErr.statusCode = 409;
+          conflictErr.code = 'SLOT_CONFLICT';
+          throw conflictErr;
+        }
+        throw err;
+      }
       const updated = mapAppointmentRow(res.rows[0]);
       await pgLogAuditEvent(
         actor,
@@ -677,6 +718,13 @@ export const pgPatientClinicalRepo = {
     ipAddress: string
   ): Promise<(Appointment & Record<string, unknown>) | null> {
     return withPgTransaction(async (client) => {
+      const prevRes = await client.query<{ status: string }>(
+        'SELECT status FROM appointments WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      if (prevRes.rows.length === 0) return null;
+      const prevStatus = prevRes.rows[0].status;
+
       const res = await client.query(
         `
         UPDATE appointments
@@ -687,6 +735,23 @@ export const pgPatientClinicalRepo = {
         [id, status, reason || null]
       );
       if (res.rows.length === 0) return null;
+
+      await client.query(
+        `
+        INSERT INTO appointment_status_history (id, appointment_id, from_status, to_status, reason, changed_by, changed_by_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [
+          `ash-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+          id,
+          prevStatus,
+          status,
+          reason || null,
+          actor.id,
+          actor.name,
+        ]
+      );
+
       const updated = mapAppointmentRow(res.rows[0]);
       await pgLogAuditEvent(
         actor,
@@ -730,7 +795,7 @@ export const pgPatientClinicalRepo = {
     ipAddress: string
   ): Promise<Consultation> {
     return withPgTransaction(async (client) => {
-      const pt = await this.findPatientByIdentifier(data.patientId);
+      const pt = await this.findPatientByIdentifier(data.patientId, client);
       if (!pt) {
         const err = new Error('Patient not found') as Error & { statusCode?: number };
         err.statusCode = 404;
@@ -826,7 +891,7 @@ export const pgPatientClinicalRepo = {
     ipAddress: string
   ): Promise<Prescription> {
     return withPgTransaction(async (client) => {
-      const pt = await this.findPatientByIdentifier(data.patientId);
+      const pt = await this.findPatientByIdentifier(data.patientId, client);
       if (!pt) {
         const err = new Error('Patient not found') as Error & { statusCode?: number };
         err.statusCode = 404;
@@ -1125,7 +1190,7 @@ export const pgPatientClinicalRepo = {
     ipAddress: string
   ): Promise<MedicalAttachment> {
     return withPgTransaction(async (client) => {
-      const pt = await this.findPatientByIdentifier(data.patientId);
+      const pt = await this.findPatientByIdentifier(data.patientId, client);
       if (!pt) {
         const err = new Error('Patient not found') as Error & { statusCode?: number };
         err.statusCode = 404;

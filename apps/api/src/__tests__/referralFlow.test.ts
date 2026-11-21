@@ -142,10 +142,12 @@ export async function runReferralFlowTests(): Promise<void> {
     {
       patientId,
       branchId: 'br-dhk-01',
+      invoiceDate: new Date().toISOString().slice(0, 10),
       items: [
         {
           itemType: 'treatment',
           serviceId: 'srv-hf-001',
+          description: 'HydraFacial Glow Session',
           quantity: 1,
           unitPrice: '5000.00',
         },

@@ -39,7 +39,7 @@ export async function runHealthAndReadinessTests(): Promise<void> {
     // 2. Test GET /api/v1/ready & GET /readyz when ping fails -> 503 with status 'error' (never pending_schema)
     setDbPool({
       query: async () => {
-        throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3308'), { code: 'ECONNREFUSED' });
+        throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' });
       },
     } as any);
 
@@ -60,10 +60,9 @@ export async function runHealthAndReadinessTests(): Promise<void> {
     // 3a. Test ping succeeds but schema_migrations is missing -> 503 with status 'pending_schema'
     setDbPool({
       query: async (sql: string) => {
-        if (sql.includes('SELECT 1 as ping')) return [[{ ping: 1 }]];
-        throw Object.assign(new Error("Table 'suoxi_crm.schema_migrations' doesn't exist"), {
-          code: 'ER_NO_SUCH_TABLE',
-          errno: 1146,
+        if (/SELECT 1 AS ping/i.test(sql)) return { rows: [{ ping: 1 }], rowCount: 1 };
+        throw Object.assign(new Error('relation "schema_migrations" does not exist'), {
+          code: '42P01',
         });
       },
     } as any);
@@ -78,8 +77,8 @@ export async function runHealthAndReadinessTests(): Promise<void> {
     // 3b. Test ping succeeds and schema_migrations exists but empty -> 503 with status 'pending_schema'
     setDbPool({
       query: async (sql: string) => {
-        if (sql.includes('SELECT 1 as ping')) return [[{ ping: 1 }]];
-        return [[]];
+        if (/SELECT 1 AS ping/i.test(sql)) return { rows: [{ ping: 1 }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
       },
     } as any);
 
@@ -99,8 +98,8 @@ export async function runHealthAndReadinessTests(): Promise<void> {
     // 4. Test ping succeeds and schema_migrations has >= 1 row -> 200 with status 'ready'
     setDbPool({
       query: async (sql: string) => {
-        if (sql.includes('SELECT 1 as ping')) return [[{ ping: 1 }]];
-        return [[{ '1': 1 }]];
+        if (/SELECT 1 AS ping/i.test(sql)) return { rows: [{ ping: 1 }], rowCount: 1 };
+        return { rows: [{ '?column?': 1 }], rowCount: 1 };
       },
     } as any);
 

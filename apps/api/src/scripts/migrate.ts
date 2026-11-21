@@ -2,19 +2,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { Migrator, MigrationFile, MigrationStore } from '../db/migrator.js';
-import { createMigrationPool, MySqlMigrationStore } from '../db/mysqlMigrationStore.js';
+import { createMigrationPool, PgMigrationStore } from '../db/pgMigrationStore.js';
 import { getConfig } from '../config/env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
-const MIGRATIONS_DIR = path.resolve(REPO_ROOT, 'db/migrations');
+const MIGRATIONS_DIR = path.resolve(REPO_ROOT, 'db/postgres/migrations');
 
-// Ensure root .env is loaded if invoked from workspace root or apps/api without overwriting shell env
 dotenv.config({ path: path.resolve(REPO_ROOT, '.env') });
 
 export function extractTargetDatabaseName(databaseUrl?: string, fallbackDbName?: string): string {
-  if (databaseUrl && databaseUrl.startsWith('mysql://')) {
+  if (
+    databaseUrl &&
+    (databaseUrl.startsWith('postgresql://') || databaseUrl.startsWith('postgres://'))
+  ) {
     try {
       const parsed = new URL(databaseUrl);
       const dbFromPath = parsed.pathname.replace(/^\//, '').trim();
@@ -38,17 +40,17 @@ export function isProductionDatabaseName(dbName: string): boolean {
   );
 }
 
-export function formatMysqlError(err: unknown): string {
+export function formatPgError(err: unknown): string {
   if (err && typeof err === 'object') {
     const e = err as Record<string, unknown>;
     const rawMsg =
-      (typeof e.sqlMessage === 'string' && e.sqlMessage) ||
+      (typeof e.detail === 'string' && e.detail) ||
       (typeof e.message === 'string' && e.message) ||
       String(err);
     const details: string[] = [];
     if (typeof e.code === 'string') details.push(`code=${e.code}`);
-    if (typeof e.errno === 'number') details.push(`errno=${e.errno}`);
-    if (typeof e.sqlState === 'string') details.push(`sqlState=${e.sqlState}`);
+    if (typeof e.severity === 'string') details.push(`severity=${e.severity}`);
+    if (typeof e.constraint === 'string') details.push(`constraint=${e.constraint}`);
     return details.length > 0 ? `${rawMsg} (${details.join(', ')})` : rawMsg;
   }
   return String(err);
@@ -65,7 +67,6 @@ async function runCli(): Promise<void> {
   const config = getConfig();
   const targetDbName = extractTargetDatabaseName(config.DATABASE_URL, config.DB_NAME);
 
-  // Safety Guard: Production database requires explicit confirmation to run DDL
   if (mode === 'up' && isProductionDatabaseName(targetDbName)) {
     if (process.env.CONFIRM_PRODUCTION_MIGRATION !== 'yes') {
       process.stderr.write(
@@ -77,7 +78,7 @@ async function runCli(): Promise<void> {
   }
 
   const pool = createMigrationPool();
-  const baseStore = new MySqlMigrationStore(pool);
+  const baseStore = new PgMigrationStore(pool);
 
   try {
     if (mode === 'plan') {
@@ -111,7 +112,6 @@ async function runCli(): Promise<void> {
       return;
     }
 
-    // mode === 'up'
     const prePlan = await new Migrator({
       migrationsDir: MIGRATIONS_DIR,
       store: baseStore,
@@ -127,7 +127,6 @@ async function runCli(): Promise<void> {
       return;
     }
 
-    // Wrap store to emit per-migration log lines and pinpoint the failing filename
     let pendingIndex = 0;
     let currentFile: MigrationFile | null = null;
 
@@ -165,11 +164,11 @@ async function runCli(): Promise<void> {
       );
     } catch (err) {
       const failedName = currentFile ? (currentFile as MigrationFile).filename : 'unknown';
-      process.stderr.write(`[FAILED]  ${failedName}: ${formatMysqlError(err)}\n`);
+      process.stderr.write(`[FAILED]  ${failedName}: ${formatPgError(err)}\n`);
       process.exitCode = 1;
     }
   } catch (err) {
-    process.stderr.write(`[MIGRATE:ERROR] ${formatMysqlError(err)}\n`);
+    process.stderr.write(`[MIGRATE:ERROR] ${formatPgError(err)}\n`);
     process.exitCode = 1;
   } finally {
     await pool.end().catch(() => {});

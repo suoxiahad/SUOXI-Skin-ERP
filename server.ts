@@ -15,9 +15,17 @@ import { z } from 'zod';
 import { isDemoRoleSwitcherAllowed, isProductionAuthEnabled } from './server/auth/productionAuth.ts';
 import { getRequestAuthUser } from './server/auth/requestContext.ts';
 import { checkRedisHealth, closeRedis, isRedisConfigured } from './server/cache/redisClient.ts';
+import { assertProductionSecurityOrThrow, maskSecret } from './server/config/securityConfig.ts';
 import { checkPgHealth, closePgPool, isPostgresConfigured } from './server/db/pgPool.ts';
 import { closeClinicQueue, getQueueStats, startClinicWorker } from './server/queue/jobQueue.ts';
+import {
+  acquireIdempotencyKey,
+  completeIdempotencyKey,
+  issuePersistentCsrfToken,
+  validatePersistentCsrfToken,
+} from './server/repositories/pgSecurityStoreRepo.ts';
 import { createPgCoreRouter } from './server/routes/pgCoreRoutes.ts';
+import { createPgExtendedRouter } from './server/routes/pgExtendedRoutes.ts';
 import { createPgOpsRouter } from './server/routes/pgOpsRoutes.ts';
 import { createPhase4AuthMiddleware, createPhase4PlatformRouter } from './server/routes/phase4PlatformRoutes.ts';
 import { getPrivateStorageHealth } from './server/storage/localFileStorage.ts';
@@ -70,22 +78,61 @@ import { referralsRouter } from './apps/api/src/routes/referrals.js';
 import { commissionsRouter } from './apps/api/src/routes/commissions.js';
 import { errorHandlerMiddleware } from './apps/api/src/middleware/errorHandler.js';
 
-const app = express();
+export const app = express();
 const portArgIndex = process.argv.indexOf('--port');
 const cliPort = portArgIndex !== -1 && process.argv[portArgIndex + 1] ? parseInt(process.argv[portArgIndex + 1], 10) : undefined;
 const rawPort = cliPort || (process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 const PORT = rawPort;
 
-app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) || 1 : 1);
+
+// Security Headers & Strict Production CORS Allowlist
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(self)');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+
+  const origin = req.headers.origin;
+  if (origin) {
+    const allowedOrigins = (process.env.CORS_ORIGIN || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const isAllowed =
+      process.env.NODE_ENV !== 'production'
+        ? allowedOrigins.length === 0 || allowedOrigins.includes(origin)
+        : allowedOrigins.includes(origin);
+    if (isAllowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, x-csrf-token, idempotency-key, X-Branch-Id, Authorization'
+      );
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    }
+    if (req.method === 'OPTIONS') {
+      return res.status(isAllowed ? 204 : 403).end();
+    }
+  }
+  return next();
+});
+
 app.use(express.json({ limit: '20mb' }));
 
-// Start BullMQ background worker automatically when REDIS_URL is configured on VPS
-if (isRedisConfigured()) {
+// Start BullMQ background worker automatically when REDIS_URL is configured (unless disabled for dedicated worker process)
+if (isRedisConfigured() && process.env.EMBEDDED_WORKER !== 'false' && process.env.SUOXI_NO_AUTOSTART !== '1') {
   startClinicWorker();
 }
 
-// Health check endpoint for VPS Nginx/PM2 monitoring
-app.get('/api/v1/health', async (_req, res) => {
+// Health check endpoint for VPS LiteSpeed/PM2 monitoring
+const handleHealth = async (_req: Request, res: Response) => {
   const pgConfigured = isPostgresConfigured();
   const redisConfigured = isRedisConfigured();
   const [pgHealth, redisHealth, queue] = await Promise.all([
@@ -110,7 +157,9 @@ app.get('/api/v1/health', async (_req, res) => {
     uptimeSeconds: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
   });
-});
+};
+app.get('/api/v1/health', handleHealth);
+app.get('/healthz', handleHealth);
 
 // Phase 4: Production Auth Middleware & Per-Request Session Context
 app.use(createPhase4AuthMiddleware());
@@ -3279,41 +3328,138 @@ function logAuditEvent(action: string, resourceType: string, resourceId: string,
 }
 
 // -------------------------------------------------------------
-// Middleware: CSRF & Idempotency
+// Middleware: Persistent PostgreSQL + Redis CSRF & Idempotency
 // -------------------------------------------------------------
 
-// Generate new CSRF token
-app.get('/api/v1/csrf-token', (_req, res) => {
+const CSRF_EXEMPT_PREFIXES = ['/api/v1/webhooks/'];
+
+// Generate new CSRF token (persisted in PostgreSQL + Redis when PG is active)
+app.get('/api/v1/csrf-token', async (req, res) => {
+  try {
+    if (isPostgresConfigured()) {
+      const sessionId = (req as Request & { sessionId?: string }).sessionId || null;
+      const csrfToken = await issuePersistentCsrfToken({ sessionId });
+      return sendSuccess(res, { csrfToken });
+    }
+  } catch (err) {
+    console.warn('[CSRF] Persistent issuance fallback:', err instanceof Error ? err.message : err);
+  }
   const token = crypto.randomBytes(24).toString('hex');
   validCsrfTokens.add(token);
   return sendSuccess(res, { csrfToken: token });
 });
 
 // Verify CSRF on unsafe HTTP methods
-app.use('/api/v1', (req: Request, res: Response, next: NextFunction) => {
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-    const token = req.headers['x-csrf-token'] as string;
-    if (!token) {
-      return sendError(res, 403, 'CSRF_INVALID', 'Missing or invalid CSRF token in x-csrf-token header.');
-    }
+app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    return next();
   }
-  next();
+  const fullPath = req.originalUrl.split('?')[0];
+  if (CSRF_EXEMPT_PREFIXES.some((prefix) => fullPath.startsWith(prefix))) {
+    return next();
+  }
+
+  const token = String(req.headers['x-csrf-token'] || '').trim();
+  if (!token) {
+    return sendError(res, 403, 'CSRF_INVALID', 'Missing or invalid CSRF token in x-csrf-token header.');
+  }
+
+  if (isPostgresConfigured()) {
+    try {
+      const valid = await validatePersistentCsrfToken(token);
+      if (!valid) {
+        return sendError(res, 403, 'CSRF_INVALID', 'Invalid or expired CSRF token.');
+      }
+      return next();
+    } catch (err) {
+      console.error('[CSRF] Validation error:', err instanceof Error ? err.message : err);
+      if (process.env.NODE_ENV === 'production') {
+        return sendError(res, 503, 'CSRF_UNAVAILABLE', 'Security token store temporarily unavailable.');
+      }
+    }
+  } else if (process.env.NODE_ENV === 'production' && !validCsrfTokens.has(token)) {
+    return sendError(res, 403, 'CSRF_INVALID', 'Invalid CSRF token.');
+  }
+
+  return next();
 });
 
-// Idempotency Middleware for Money, Stock, Package mutations (Rule 5)
+const pendingIdempotencyMeta = new Map<string, { method: string; routePath: string; actorScope: string }>();
+
+// Idempotency Middleware for Money, Stock, Package mutations (Rule 5 — PG persistent)
 function checkIdempotency(req: Request, res: Response, next: NextFunction) {
-  const key = req.headers['idempotency-key'] as string;
-  if (key && idempotencyStore.has(key)) {
+  const key = String(req.headers['idempotency-key'] || '').trim();
+  if (!key) return next();
+
+  if (isPostgresConfigured()) {
+    const actor = getRequestAuthUser();
+    const actorScope = actor?.id || 'anonymous';
+    const routePath = req.path;
+    const method = req.method.toUpperCase();
+    acquireIdempotencyKey({
+      key,
+      method,
+      routePath,
+      actorScope,
+      requestPayload: req.body,
+    })
+      .then((outcome) => {
+        if (outcome.state === 'replay') {
+          return res.status(outcome.statusCode).json(outcome.body);
+        }
+        if (outcome.state === 'conflict') {
+          return sendError(
+            res,
+            409,
+            'IDEMPOTENCY_CONFLICT',
+            outcome.message || 'Idempotency-Key was already used with a different request payload.'
+          );
+        }
+        if (outcome.state === 'in_progress') {
+          return sendError(
+            res,
+            409,
+            'IDEMPOTENCY_IN_PROGRESS',
+            outcome.message || 'A request with this Idempotency-Key is currently being processed.'
+          );
+        }
+        pendingIdempotencyMeta.set(key, { method, routePath, actorScope });
+        return next();
+      })
+      .catch((err) => {
+        console.error('[Idempotency] PG check failed:', err instanceof Error ? err.message : err);
+        return sendError(res, 503, 'IDEMPOTENCY_UNAVAILABLE', 'Idempotency store unavailable.');
+      });
+    return;
+  }
+
+  if (idempotencyStore.has(key)) {
     const cached = idempotencyStore.get(key)!;
     return res.status(cached.statusCode).json(cached.body);
   }
-  next();
+  return next();
 }
 
 function saveIdempotency(key: string | undefined, statusCode: number, body: unknown) {
-  if (key) {
-    idempotencyStore.set(key, { statusCode, body });
+  if (!key) return;
+  if (isPostgresConfigured()) {
+    const trimmed = key.trim();
+    const meta = pendingIdempotencyMeta.get(trimmed);
+    pendingIdempotencyMeta.delete(trimmed);
+    if (!meta) return;
+    void completeIdempotencyKey({
+      key: trimmed,
+      method: meta.method,
+      routePath: meta.routePath,
+      actorScope: meta.actorScope,
+      statusCode,
+      responseBody: body,
+    }).catch((err) => {
+      console.error('[Idempotency] PG save failed:', err instanceof Error ? err.message : err);
+    });
+    return;
   }
+  idempotencyStore.set(key, { statusCode, body });
 }
 
 // Phase 4: Mount Production Auth, Private VPS File Storage, Redis Dashboard Cache & Queue Routes
@@ -3483,6 +3629,26 @@ app.use(
     getServerOutgoingIp: () => getServerOutgoingIp(),
   })
 );
+
+// Phase 2/3/4 Extended PostgreSQL Router (Catalog, Calendar, Clinical Sessions, Portal, Notifications, Webhooks, Reports, Refunds)
+app.use(
+  createPgExtendedRouter({
+    getFallbackUser: () => currentUser,
+  })
+);
+
+// Production Fail-Closed Barrier: NEVER fall through to in-memory prototype routes in production
+app.use(['/api', '/portal'], (req: Request, res: Response, next: NextFunction) => {
+  if (process.env.NODE_ENV === 'production') {
+    return sendError(
+      res,
+      404,
+      'API_ENDPOINT_NOT_FOUND',
+      `Production API endpoint ${req.method} ${req.originalUrl} not found`
+    );
+  }
+  return next();
+});
 
 // Branches
 app.get('/api/v1/branches', (_req, res) => {
@@ -6154,13 +6320,13 @@ app.get('/api/v1/audit-events', (_req, res) => {
 let smsGatewayConfig: SmsGatewayConfig = {
   provider: 'msg_mram',
   apiUrl: 'https://msg.mram.com.bd/smsapi',
-  apiKey: 'mram_live_sec_79a29e4bd0182c',
-  senderId: 'SUOXI',
+  apiKey: process.env.SMS_GATEWAY_API_KEY || '',
+  senderId: process.env.SMS_SENDER_ID || 'SUOXI',
   defaultType: 'text',
   defaultLabel: 'transactional',
-  isActive: true,
-  balanceBDT: 3450.50,
-  balanceCredits: 9858,
+  isActive: Boolean(process.env.SMS_GATEWAY_API_KEY),
+  balanceBDT: 0,
+  balanceCredits: 0,
   lastCheckedAt: new Date().toISOString(),
   autoSendOnBooking: true,
   autoSendOnPayment: true,
@@ -6295,15 +6461,15 @@ let smsLogs: SmsLogRecord[] = [
 
 let emailGatewayConfig: EmailGatewayConfig = {
   provider: 'cpanel_smtp',
-  smtpHost: 'mail.suoxiclinic.com',
-  smtpPort: 465,
+  smtpHost: process.env.SMTP_HOST || 'mail.suoxiclinic.com',
+  smtpPort: Number(process.env.SMTP_PORT || 465),
   encryption: 'SSL/TLS',
-  smtpUser: 'care@suoxiclinic.com',
-  smtpPass: 'Suoxi@Aesthetic#2026',
+  smtpUser: process.env.SMTP_USER || 'care@suoxiclinic.com',
+  smtpPass: process.env.SMTP_PASS || '',
   fromName: 'SUOXI Skin Care & Aesthetic Center',
-  fromEmail: 'care@suoxiclinic.com',
+  fromEmail: process.env.SMTP_FROM || 'care@suoxiclinic.com',
   replyToEmail: 'support@suoxiclinic.com',
-  isActive: true,
+  isActive: Boolean(process.env.SMTP_USER && process.env.SMTP_PASS),
   lastTestedAt: new Date().toISOString(),
   autoEmailPrescription: true,
   autoEmailInvoice: true,
@@ -6527,9 +6693,9 @@ const MRAM_ERROR_CODES: Record<string, { title: string; desc: string; fix: strin
   },
 };
 
-// SMS Gateway Endpoints (msg.mram.com.bd)
+// SMS Gateway Endpoints (msg.mram.com.bd — preview fallback masks secrets)
 app.get('/api/v1/integration/sms/config', (_req, res) => {
-  return sendSuccess(res, smsGatewayConfig);
+  return sendSuccess(res, { ...smsGatewayConfig, apiKey: maskSecret(smsGatewayConfig.apiKey) });
 });
 
 app.get('/api/v1/integration/sms/server-ip', async (_req, res) => {
@@ -6538,13 +6704,17 @@ app.get('/api/v1/integration/sms/server-ip', async (_req, res) => {
 });
 
 app.put('/api/v1/integration/sms/config', (req, res) => {
+  const nextBody = { ...(req.body || {}) };
+  if (typeof nextBody.apiKey === 'string' && (nextBody.apiKey.includes('••••') || nextBody.apiKey === '')) {
+    nextBody.apiKey = smsGatewayConfig.apiKey;
+  }
   smsGatewayConfig = {
     ...smsGatewayConfig,
-    ...req.body,
+    ...nextBody,
     lastCheckedAt: new Date().toISOString(),
   };
   logAuditEvent('INTEGRATION_SMS_UPDATED', 'integration', 'sms-config', `Updated SMS Gateway configuration (Sender ID: ${smsGatewayConfig.senderId})`);
-  return sendSuccess(res, smsGatewayConfig);
+  return sendSuccess(res, { ...smsGatewayConfig, apiKey: maskSecret(smsGatewayConfig.apiKey) });
 });
 
 app.get('/api/v1/integration/sms/balance', async (_req, res) => {
@@ -6734,18 +6904,22 @@ app.post('/api/v1/integration/sms/templates', (req, res) => {
   return sendSuccess(res, newTmpl, {}, 201);
 });
 
-// Email Gateway Endpoints (cPanel SMTP)
+// Email Gateway Endpoints (cPanel SMTP — preview fallback masks secrets)
 app.get('/api/v1/integration/email/config', (_req, res) => {
-  return sendSuccess(res, emailGatewayConfig);
+  return sendSuccess(res, { ...emailGatewayConfig, smtpPass: maskSecret(emailGatewayConfig.smtpPass) });
 });
 
 app.put('/api/v1/integration/email/config', (req, res) => {
+  const nextBody = { ...(req.body || {}) };
+  if (typeof nextBody.smtpPass === 'string' && (nextBody.smtpPass.includes('••••') || nextBody.smtpPass === '')) {
+    nextBody.smtpPass = emailGatewayConfig.smtpPass;
+  }
   emailGatewayConfig = {
     ...emailGatewayConfig,
-    ...req.body,
+    ...nextBody,
   };
   logAuditEvent('INTEGRATION_EMAIL_UPDATED', 'integration', 'email-config', `Updated cPanel SMTP Configuration (Host: ${emailGatewayConfig.smtpHost}, User: ${emailGatewayConfig.smtpUser})`);
-  return sendSuccess(res, emailGatewayConfig);
+  return sendSuccess(res, { ...emailGatewayConfig, smtpPass: maskSecret(emailGatewayConfig.smtpPass) });
 });
 
 app.post('/api/v1/integration/email/send-test', (req, res) => {
@@ -7386,6 +7560,9 @@ app.use(['/portal', '/api', '/api/v1'], errorHandlerMiddleware as unknown as exp
 // -------------------------------------------------------------
 
 async function start() {
+  // Enforce fail-closed production security validation before accepting traffic
+  assertProductionSecurityOrThrow();
+
   // Catch unhandled API requests and respond with JSON 404 (never return HTML for API requests)
   app.use(['/api', '/portal/api'], (req, res) => {
     res.status(404).json({
@@ -7441,7 +7618,9 @@ async function start() {
   });
 }
 
-start().catch((err) => {
-  console.error('[SUOXI CRM] Failed to start server:', err);
-  process.exit(1);
-});
+if (process.env.SUOXI_NO_AUTOSTART !== '1') {
+  start().catch((err) => {
+    console.error('[SUOXI CRM] Failed to start server:', err);
+    process.exit(1);
+  });
+}

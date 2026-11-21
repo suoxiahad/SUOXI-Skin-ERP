@@ -103,6 +103,27 @@ export async function savePrivateFileBuffer(params: {
     throw err;
   }
 
+  // Verify binary magic bytes match declared MIME type (blocks disguised scripts/executables)
+  const b = params.buffer;
+  const magicOk =
+    (mime === 'image/png' && b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) ||
+    ((mime === 'image/jpeg' || mime === 'image/jpg') && b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) ||
+    (mime === 'image/webp' &&
+      b.length >= 12 &&
+      b.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      b.subarray(8, 12).toString('ascii') === 'WEBP') ||
+    (mime === 'application/pdf' && b.length >= 4 && b.subarray(0, 4).toString('ascii') === '%PDF');
+
+  if (!magicOk) {
+    const err = new Error(`File binary signature does not match declared MIME type '${mime}'`) as Error & {
+      statusCode?: number;
+      code?: string;
+    };
+    err.statusCode = 400;
+    err.code = 'INVALID_FILE_SIGNATURE';
+    throw err;
+  }
+
   const root = getUploadRootDir();
   const folder = mapCategoryToFolder(params.categoryOrType);
   const ym = new Date().toISOString().slice(0, 7); // YYYY-MM

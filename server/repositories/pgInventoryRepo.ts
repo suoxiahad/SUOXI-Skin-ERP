@@ -279,6 +279,43 @@ export const pgInventoryRepo = {
 
       const created = mapInventoryRow(ins.rows[0] as Record<string, unknown>);
 
+      if (input.batchNumber) {
+        const batchId = `bat-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+        await client.query(
+          `
+          INSERT INTO product_batches (
+            id, inventory_item_id, branch_id, batch_number, expiry_date,
+            unit_cost_bdt, quantity_received, quantity_on_hand
+          )
+          VALUES ($1, $2, $3, $4, $5::date, $6, $7, $7)
+          ON CONFLICT (branch_id, inventory_item_id, batch_number) DO UPDATE
+          SET quantity_on_hand = EXCLUDED.quantity_on_hand, updated_at = NOW()
+          `,
+          [batchId, created.id, input.branchId, input.batchNumber, input.expiryDate || null, input.unitCostBDT, input.currentStock]
+        );
+      }
+
+      if (input.currentStock > 0) {
+        await client.query(
+          `
+          INSERT INTO stock_movements (
+            id, branch_id, inventory_item_id, batch_number, movement_type,
+            quantity_delta, balance_after, unit_cost_bdt, reference_type, reference_id, reason, performed_by
+          )
+          VALUES ($1, $2, $3, $4, 'initial_stock', $5, $5, $6, 'inventory_item', $3, 'Initial product creation', $7)
+          `,
+          [
+            `smv-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+            input.branchId,
+            created.id,
+            input.batchNumber || null,
+            input.currentStock,
+            input.unitCostBDT,
+            actor.id,
+          ]
+        );
+      }
+
       await pgLogAuditEvent(
         actor,
         'INVENTORY_ITEM_CREATED',
@@ -456,6 +493,29 @@ export const pgInventoryRepo = {
 
       const adjustment = mapStockAdjustmentRow(adjRes.rows[0] as Record<string, unknown>);
 
+      await client.query(
+        `
+        INSERT INTO stock_movements (
+          id, branch_id, inventory_item_id, batch_number, movement_type,
+          quantity_delta, balance_after, unit_cost_bdt, reference_type, reference_id, reason, performed_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'stock_adjustment', $9, $10, $11)
+        `,
+        [
+          `smv-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+          item.branchId,
+          item.id,
+          batchNumber || null,
+          input.adjustmentType,
+          input.quantityDelta,
+          newStock,
+          item.unitCostBDT,
+          adjId,
+          input.reason,
+          actor.id,
+        ]
+      );
+
       await pgLogAuditEvent(
         actor,
         'STOCK_ADJUSTMENT',
@@ -629,6 +689,25 @@ export const pgInventoryRepo = {
 
       const created = mapPurchaseOrderRow(ins.rows[0] as Record<string, unknown>);
 
+      for (const poLine of poItems) {
+        await client.query(
+          `
+          INSERT INTO purchase_order_items (
+            id, purchase_order_id, inventory_item_id, ordered_qty, received_qty, unit_cost_bdt, line_total_bdt
+          )
+          VALUES ($1, $2, $3, $4, 0, $5, $6)
+          `,
+          [
+            `poi-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+            created.id,
+            poLine.itemId,
+            poLine.orderedQty,
+            poLine.unitCostBDT,
+            poLine.totalBDT,
+          ]
+        );
+      }
+
       await pgLogAuditEvent(
         actor,
         'PURCHASE_ORDER_CREATED',
@@ -730,6 +809,52 @@ export const pgInventoryRepo = {
               unitCost,
               `Goods Received Note for PO ${po.poNumber}. Supplier Invoice: ${input.invoiceRefNumber || 'N/A'}`,
               actor.name,
+            ]
+          );
+
+          await client.query(
+            `
+            INSERT INTO product_batches (
+              id, inventory_item_id, branch_id, batch_number, expiry_date,
+              unit_cost_bdt, quantity_received, quantity_on_hand
+            )
+            VALUES ($1, $2, $3, $4, $5::date, $6, $7, $7)
+            ON CONFLICT (branch_id, inventory_item_id, batch_number) DO UPDATE
+            SET quantity_received = product_batches.quantity_received + EXCLUDED.quantity_received,
+                quantity_on_hand = product_batches.quantity_on_hand + EXCLUDED.quantity_on_hand,
+                expiry_date = COALESCE(EXCLUDED.expiry_date, product_batches.expiry_date),
+                updated_at = NOW()
+            `,
+            [
+              `bat-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              inv.id,
+              inv.branchId,
+              rec.batchNumber,
+              rec.expiryDate || null,
+              unitCost,
+              rec.receivedQty,
+            ]
+          );
+
+          await client.query(
+            `
+            INSERT INTO stock_movements (
+              id, branch_id, inventory_item_id, batch_number, movement_type,
+              quantity_delta, balance_after, unit_cost_bdt, reference_type, reference_id, reason, performed_by
+            )
+            VALUES ($1, $2, $3, $4, 'grn_receipt', $5, $6, $7, 'purchase_order', $8, $9, $10)
+            `,
+            [
+              `smv-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              inv.branchId,
+              inv.id,
+              rec.batchNumber,
+              rec.receivedQty,
+              nextStock,
+              unitCost,
+              po.id,
+              `GRN receipt for PO ${po.poNumber}`,
+              actor.id,
             ]
           );
         }

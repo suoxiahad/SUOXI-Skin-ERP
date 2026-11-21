@@ -1,19 +1,45 @@
 /**
- * SUOXI Skin Care & Aesthetic Center CRM
- * PostgreSQL Connection Pool & ACID Transaction Helper
+ * SUOXI Skin Care & Aesthetic Center ERP
+ * PostgreSQL Connection Pool & ACID Transaction Helper (PostgreSQL ONLY)
  *
- * Uses `DATABASE_URL` (or standard `PGHOST`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`).
- * Safely reports `isPostgresConfigured() === false` in preview environments where
- * PostgreSQL is not provisioned, while running full pooled PostgreSQL on VPS.
+ * Features:
+ *  - Uses `DATABASE_URL` (postgresql://...) or `PGHOST`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`.
+ *  - Supports injectable Pool override for automated clean-database PostgreSQL testing.
+ *  - Automatic retry with exponential backoff on PostgreSQL deadlock (40P01) &
+ *    serialization failure (40001).
+ *  - Health & Readiness checks verifying connectivity and `schema_migrations`.
  */
 
 import pg, { type Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 
 const { Pool: PgPool } = pg;
 
-let poolInstance: Pool | null = null;
+export interface PgLikeClient {
+  query<T extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[]
+  ): Promise<QueryResult<T>>;
+  release(): void;
+}
+
+export interface PgLikePool {
+  query<T extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[]
+  ): Promise<QueryResult<T>>;
+  connect(): Promise<PgLikeClient>;
+  end(): Promise<void>;
+}
+
+const RETRYABLE_PG_CODES = new Set(['40P01', '40001']);
+
+let poolInstance: PgLikePool | null = null;
+let overrideActive = false;
 
 export function isPostgresConfigured(): boolean {
+  if (overrideActive && poolInstance) {
+    return true;
+  }
   const url = process.env.DATABASE_URL?.trim();
   if (url && (url.startsWith('postgres://') || url.startsWith('postgresql://'))) {
     return true;
@@ -21,7 +47,16 @@ export function isPostgresConfigured(): boolean {
   return Boolean(process.env.PGHOST && process.env.PGDATABASE && process.env.PGUSER);
 }
 
-export function getPgPool(): Pool {
+/**
+ * Allows automated tests to inject an isolated PostgreSQL engine (e.g., PGlite or test pool)
+ * without mocking business logic or SQL execution.
+ */
+export function setPgPoolOverride(customPool: PgLikePool | null): void {
+  poolInstance = customPool;
+  overrideActive = Boolean(customPool);
+}
+
+export function getPgPool(): PgLikePool {
   if (poolInstance) {
     return poolInstance;
   }
@@ -40,7 +75,7 @@ export function getPgPool(): Pool {
   const sslEnabled =
     process.env.PGSSLMODE === 'require' || process.env.DATABASE_SSL === 'true';
 
-  poolInstance = new PgPool(
+  const realPool: Pool = new PgPool(
     connectionString
       ? {
           connectionString,
@@ -62,10 +97,15 @@ export function getPgPool(): Pool {
         }
   );
 
-  poolInstance.on('error', (err) => {
+  realPool.on('connect', (client) => {
+    client.query("SET TIME ZONE 'Asia/Dhaka'").catch(() => {});
+  });
+
+  realPool.on('error', (err) => {
     console.error('[SUOXI PG] Unexpected idle client error:', err.message);
   });
 
+  poolInstance = realPool as unknown as PgLikePool;
   return poolInstance;
 }
 
@@ -77,46 +117,96 @@ export async function pgQuery<T extends QueryResultRow = QueryResultRow>(
   return pool.query<T>(text, params);
 }
 
+function isRetryablePgError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: string }).code;
+  return Boolean(code && RETRYABLE_PG_CODES.has(code));
+}
+
 /**
- * Runs a callback inside an ACID PostgreSQL transaction (`BEGIN` / `COMMIT` / `ROLLBACK`).
- * Required for billing payments, invoice voiding, and non-duplicate package deductions.
+ * Runs a callback inside an ACID PostgreSQL transaction (`BEGIN` / `COMMIT` / `ROLLBACK`)
+ * with automatic exponential backoff retry on PostgreSQL deadlocks (40P01) & serialization conflicts (40001).
  */
-export async function withPgTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withPgTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>,
+  options: { maxRetries?: number } = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? 3;
   const pool = getPgPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
+
+  let attempt = 0;
+  while (true) {
+    const client = await pool.connect();
     try {
-      await client.query('ROLLBACK');
-    } catch (rollbackErr) {
-      console.error('[SUOXI PG] Rollback failed:', rollbackErr);
+      await client.query('BEGIN');
+      const result = await fn(client as unknown as PoolClient);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('[SUOXI PG] Rollback failed:', rollbackErr);
+      }
+
+      if (isRetryablePgError(err) && attempt < maxRetries) {
+        attempt += 1;
+        const delayMs = Math.min(500, 30 * Math.pow(2, attempt) + Math.floor(Math.random() * 20));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      throw err;
+    } finally {
+      client.release();
     }
-    throw err;
-  } finally {
-    client.release();
   }
 }
 
-export async function checkPgHealth(): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
+export async function checkPgHealth(): Promise<{
+  ok: boolean;
+  latencyMs?: number;
+  migrationsApplied?: number;
+  schemaReady?: boolean;
+  error?: string;
+}> {
   if (!isPostgresConfigured()) {
-    return { ok: false, error: 'DATABASE_URL not configured' };
+    return { ok: false, schemaReady: false, error: 'DATABASE_URL not configured' };
   }
   const started = Date.now();
   try {
     await pgQuery('SELECT 1 AS ok');
-    return { ok: true, latencyMs: Date.now() - started };
+    try {
+      const migRes = await pgQuery<{ cnt: string }>('SELECT COUNT(*)::text AS cnt FROM schema_migrations');
+      const count = Number.parseInt(migRes.rows[0]?.cnt || '0', 10);
+      return {
+        ok: true,
+        latencyMs: Date.now() - started,
+        migrationsApplied: count,
+        schemaReady: count > 0,
+      };
+    } catch {
+      return {
+        ok: true,
+        latencyMs: Date.now() - started,
+        migrationsApplied: 0,
+        schemaReady: false,
+      };
+    }
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      schemaReady: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
 export async function closePgPool(): Promise<void> {
   if (poolInstance) {
-    await poolInstance.end();
+    const current = poolInstance;
     poolInstance = null;
+    overrideActive = false;
+    await current.end();
   }
 }

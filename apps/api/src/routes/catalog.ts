@@ -226,7 +226,7 @@ catalogRouter.post(
       const user = {
         id: req.accessContext?.userId || 'usr-system',
         role: req.accessContext?.roles[0] || 'admin_manager',
-        fullName: req.accessContext?.user?.fullName || undefined,
+        fullName: req.accessContext?.username || undefined,
       };
 
       const created = await catalogService.createFollowupRule(
@@ -294,7 +294,7 @@ catalogRouter.post(
       const user = {
         id: req.accessContext?.userId || 'usr-system',
         role: req.accessContext?.roles[0] || 'admin_manager',
-        fullName: req.accessContext?.user?.fullName || undefined,
+        fullName: req.accessContext?.username || undefined,
       };
 
       const created = await catalogService.createGuidance(
@@ -387,7 +387,7 @@ catalogRouter.post(
       const user = {
         id: req.accessContext?.userId || 'usr-system',
         role: req.accessContext?.roles[0] || 'doctor',
-        fullName: req.accessContext?.user?.fullName || undefined,
+        fullName: req.accessContext?.username || undefined,
         permissions: req.accessContext?.effectivePermissions,
       };
 

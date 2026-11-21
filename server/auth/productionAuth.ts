@@ -19,12 +19,14 @@ import type { User, UserRole } from '../../src/types/index.ts';
 import { getRedisClient } from '../cache/redisClient.ts';
 import { isPostgresConfigured, pgQuery } from '../db/pgPool.ts';
 import { extractClientIp, pgLogAuditEvent, pgLogSecurityEvent } from '../repositories/pgHelpers.ts';
+import {
+  checkPersistentLoginLockout,
+  clearPersistentLoginFailures,
+  recordPersistentLoginFailure,
+} from '../repositories/pgSecurityStoreRepo.ts';
 
 export const SESSION_COOKIE_NAME = 'suoxi_sid';
 const REDIS_SESSION_PREFIX = 'suoxi:sess:';
-const REDIS_LOGIN_FAIL_PREFIX = 'suoxi:loginfail:';
-const MAX_FAILED_LOGINS = 10;
-const LOGIN_LOCKOUT_SECONDS = 15 * 60;
 
 export interface AuthenticatedSession {
   sessionId: string;
@@ -39,13 +41,14 @@ export interface AuthedRequest extends Request {
 }
 
 export function isProductionAuthEnabled(): boolean {
+  if (process.env.NODE_ENV === 'production') return true;
   if (process.env.REQUIRE_AUTH === 'true') return true;
   if (process.env.ENABLE_DEMO_ROLE_SWITCHER === 'true') return false;
   return isPostgresConfigured();
 }
 
 export function isDemoRoleSwitcherAllowed(): boolean {
-  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEMO_ROLE_SWITCHER !== 'true') {
+  if (process.env.NODE_ENV === 'production') {
     return false;
   }
   return !isProductionAuthEnabled();
@@ -137,39 +140,16 @@ function mapPgUserToSessionUser(row: Record<string, unknown>): User {
 }
 
 async function checkLoginRateLimit(key: string): Promise<{ blocked: boolean; attempts: number }> {
-  const redis = getRedisClient();
-  if (!redis) return { blocked: false, attempts: 0 };
-  try {
-    const val = await redis.get(`${REDIS_LOGIN_FAIL_PREFIX}${key}`);
-    const attempts = val ? parseInt(val, 10) : 0;
-    return { blocked: attempts >= MAX_FAILED_LOGINS, attempts };
-  } catch {
-    return { blocked: false, attempts: 0 };
-  }
+  const res = await checkPersistentLoginLockout(key);
+  return { blocked: res.blocked, attempts: res.failedCount };
 }
 
 async function recordLoginFailure(key: string): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-  try {
-    const fullKey = `${REDIS_LOGIN_FAIL_PREFIX}${key}`;
-    const next = await redis.incr(fullKey);
-    if (next === 1) {
-      await redis.expire(fullKey, LOGIN_LOCKOUT_SECONDS);
-    }
-  } catch {
-    // non-fatal
-  }
+  await recordPersistentLoginFailure(key, 'combined');
 }
 
 async function clearLoginFailures(key: string): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-  try {
-    await redis.del(`${REDIS_LOGIN_FAIL_PREFIX}${key}`);
-  } catch {
-    // non-fatal
-  }
+  await clearPersistentLoginFailures(key);
 }
 
 export async function loginWithPassword(params: {

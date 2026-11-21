@@ -572,7 +572,13 @@ export class CallCenterService {
 
   // --- 4. Task Auto-Generator (Idempotent via dedupe_key) ---
 
-  public async generateFollowUpTasks(): Promise<{ generated: number; skippedExisting: number; total: number }> {
+  public async generateFollowUpTasks(): Promise<{
+    generated: number;
+    skippedExisting: number;
+    skippedDuplicates: number;
+    total: number;
+    tasks: FollowUpTaskDto[];
+  }> {
     let generated = 0;
     let skippedExisting = 0;
     const now = new Date();

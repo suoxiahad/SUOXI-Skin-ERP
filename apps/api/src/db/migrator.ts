@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { Pool, PoolConnection } from 'mysql2/promise';
 import { logger } from '../logger/logger.js';
 
 export interface MigrationFile {

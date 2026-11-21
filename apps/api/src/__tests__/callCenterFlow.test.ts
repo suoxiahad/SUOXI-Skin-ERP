@@ -56,8 +56,9 @@ export async function runCallCenterFlowTests() {
       gender: 'female',
       primaryMobile: uniqueMobile,
     },
+    'br-dhk-01',
     'usr-admin-01',
-    'br-dhk-01'
+    '127.0.0.1'
   );
 
   // First generation run
@@ -139,11 +140,12 @@ export async function runCallCenterFlowTests() {
   );
 
   // Assert Call Contact Log recorded properly
-  assert.equal(callLog.outcome, 'reschedule_requested');
-  assert.equal(callLog.reschedule_status, 'pending');
-  assert.equal(callLog.reschedule_requested_date, '2026-11-05');
-  assert.equal(callLog.reschedule_requested_time, '15:30');
-  assert.equal(callLog.call_reference, 'PBX-REC-8849');
+  const recordedLog = (callLog as any).log ?? callLog;
+  assert.equal(recordedLog.outcome, 'reschedule_requested');
+  assert.equal(recordedLog.reschedule_status, 'pending');
+  assert.equal(recordedLog.reschedule_requested_date, '2026-11-05');
+  assert.equal(recordedLog.reschedule_requested_time, '15:30');
+  assert.equal(recordedLog.call_reference, 'PBX-REC-8849');
 
   // Assert Staff Alert was created for Doctor and Reception
   const alertsRes = await staffAlertService.listAlerts({});

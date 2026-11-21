@@ -1,58 +1,49 @@
 import {
   withTransaction,
   isRetryableError,
-  RETRYABLE_MYSQL_ERROR_CODES,
+  RETRYABLE_PG_ERROR_CODES,
 } from '../db/transaction.js';
-import type { Pool, PoolConnection } from 'mysql2/promise';
+import type { Pool, PoolClient } from 'pg';
 
 export async function runTransactionTests(): Promise<void> {
-  console.log('[TEST-SUITE] Running Transaction & Deadlock Retry Tests...');
+  console.log('[TEST-SUITE] Running PostgreSQL Transaction & Deadlock Retry Tests...');
 
-  // 1. Verify retryable error detection
-  if (!isRetryableError({ errno: 1213 })) {
-    throw new Error('errno 1213 should be detected as retryable deadlock');
+  if (!RETRYABLE_PG_ERROR_CODES.has('40P01') || !RETRYABLE_PG_ERROR_CODES.has('40001')) {
+    throw new Error('Expected PostgreSQL deadlock (40P01) and serialization (40001) codes in retryable set');
   }
-  if (!isRetryableError({ code: 'ER_LOCK_DEADLOCK' })) {
-    throw new Error('ER_LOCK_DEADLOCK should be detected as retryable');
+  if (!isRetryableError({ code: '40P01' })) {
+    throw new Error('40P01 should be detected as retryable deadlock');
   }
-  if (!isRetryableError({ errno: 1205 })) {
-    throw new Error('errno 1205 should be detected as retryable lock timeout');
+  if (!isRetryableError({ code: '40001' })) {
+    throw new Error('40001 should be detected as retryable serialization failure');
   }
-  if (!isRetryableError({ code: 'ER_LOCK_WAIT_TIMEOUT' })) {
-    throw new Error('ER_LOCK_WAIT_TIMEOUT should be detected as retryable');
+  if (!isRetryableError({ code: '55P03' })) {
+    throw new Error('55P03 should be detected as retryable lock_not_available');
   }
-  if (isRetryableError({ errno: 1062, code: 'ER_DUP_ENTRY' })) {
-    throw new Error('ER_DUP_ENTRY must not be retryable');
+  if (isRetryableError({ code: '23505' })) {
+    throw new Error('23505 (unique_violation) must not be retryable');
   }
-  console.log('  ✓ Retryable deadlock (1213) and lock wait timeout (1205) correctly classified');
+  console.log('  ✓ Retryable PostgreSQL deadlock (40P01) and serialization (40001) errors correctly classified');
 
-  // 2. Mock Pool & Connection to simulate deadlock on attempt 1, success on attempt 2
-  let connectionAcquisitions = 0;
-  let beginTransactionCalls = 0;
+  let beginCalls = 0;
   let commitCalls = 0;
   let rollbackCalls = 0;
   let releaseCalls = 0;
 
-  const mockConnection = {
-    beginTransaction: async () => {
-      beginTransactionCalls++;
-    },
-    commit: async () => {
-      commitCalls++;
-    },
-    rollback: async () => {
-      rollbackCalls++;
+  const mockClient = {
+    query: async (sql: string) => {
+      if (sql === 'BEGIN') beginCalls++;
+      else if (sql === 'COMMIT') commitCalls++;
+      else if (sql === 'ROLLBACK') rollbackCalls++;
+      return { rows: [] };
     },
     release: () => {
       releaseCalls++;
     },
-  } as unknown as PoolConnection;
+  } as unknown as PoolClient;
 
   const mockPool = {
-    getConnection: async () => {
-      connectionAcquisitions++;
-      return mockConnection;
-    },
+    connect: async () => mockClient,
   } as unknown as Pool;
 
   let executionCount = 0;
@@ -61,10 +52,8 @@ export async function runTransactionTests(): Promise<void> {
     async () => {
       executionCount++;
       if (executionCount === 1) {
-        // First attempt: simulate MySQL 1213 deadlock
-        const deadlockError = new Error('Deadlock found when trying to get lock; try restarting transaction');
-        (deadlockError as unknown as Record<string, unknown>).errno = 1213;
-        (deadlockError as unknown as Record<string, unknown>).code = 'ER_LOCK_DEADLOCK';
+        const deadlockError = new Error('deadlock detected');
+        (deadlockError as unknown as Record<string, unknown>).code = '40P01';
         throw deadlockError;
       }
       return { success: true, processedItem: 'invoice_session_txn' };
@@ -79,21 +68,13 @@ export async function runTransactionTests(): Promise<void> {
   if (result.processedItem !== 'invoice_session_txn') {
     throw new Error(`Unexpected transaction result: ${JSON.stringify(result)}`);
   }
-  if (executionCount !== 2) {
-    throw new Error(`Expected exactly 2 executions (1 retry), got ${executionCount}`);
+  if (executionCount !== 2 || beginCalls !== 2 || rollbackCalls !== 1 || commitCalls !== 1 || releaseCalls !== 2) {
+    throw new Error(
+      `Unexpected counts: exec=${executionCount}, begin=${beginCalls}, rollback=${rollbackCalls}, commit=${commitCalls}, release=${releaseCalls}`
+    );
   }
-  if (rollbackCalls !== 1) {
-    throw new Error(`Expected 1 rollback on failed attempt, got ${rollbackCalls}`);
-  }
-  if (commitCalls !== 1) {
-    throw new Error(`Expected 1 commit on successful attempt, got ${commitCalls}`);
-  }
-  if (releaseCalls !== 2) {
-    throw new Error(`Expected 2 connection releases, got ${releaseCalls}`);
-  }
-  console.log('  ✓ Transaction retries after deadlock (1213) and succeeds on next attempt');
+  console.log('  ✓ Transaction retries after PostgreSQL deadlock (40P01) and succeeds on next attempt');
 
-  // 3. Test non-retryable error is not retried
   let nonRetryableExecutions = 0;
   try {
     await withTransaction(

@@ -17,6 +17,11 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { User } from '../../src/types/index.ts';
+import {
+  canUserAccessBranch,
+  requireRoles,
+  resolveAuthorizedBranchScope,
+} from '../auth/rbacMiddleware.ts';
 import { isPostgresConfigured } from '../db/pgPool.ts';
 import { pgBillingPackageRepo } from '../repositories/pgBillingPackageRepo.ts';
 import {
@@ -121,7 +126,11 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/branches', async (req, res) => {
+  const adminOnly = requireRoles(['super_admin', 'admin_manager'], deps.getCurrentUser);
+  const billingRoles = requireRoles(['super_admin', 'admin_manager', 'cashier', 'receptionist'], deps.getCurrentUser);
+  const clinicalRoles = requireRoles(['super_admin', 'admin_manager', 'doctor', 'therapist'], deps.getCurrentUser);
+
+  router.post('/api/v1/branches', adminOnly, async (req, res) => {
     try {
       const { name, nameBn, code, address, city, phone, email, managerName, managerPhone, operatingHours } =
         req.body || {};
@@ -139,7 +148,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/branches/:id', async (req, res) => {
+  router.put('/api/v1/branches/:id', adminOnly, async (req, res) => {
     try {
       const updated = await pgOrgRepo.updateBranch(
         String(req.params.id),
@@ -154,7 +163,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/branches/:id/toggle-status', async (req, res) => {
+  router.post('/api/v1/branches/:id/toggle-status', adminOnly, async (req, res) => {
     try {
       const updated = await pgOrgRepo.toggleBranchStatus(
         String(req.params.id),
@@ -191,7 +200,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/users', async (req, res) => {
+  router.post('/api/v1/users', adminOnly, async (req, res) => {
     try {
       const body = req.body || {};
       if (!body.name || !body.email || !body.role || !body.phone) {
@@ -204,7 +213,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/users/:id', async (req, res) => {
+  router.put('/api/v1/users/:id', adminOnly, async (req, res) => {
     try {
       const updated = await pgOrgRepo.updateUser(
         String(req.params.id),
@@ -219,7 +228,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/users/:id/toggle-status', async (req, res) => {
+  router.post('/api/v1/users/:id/toggle-status', adminOnly, async (req, res) => {
     try {
       const { status, reason } = req.body || {};
       if (!['active', 'inactive', 'suspended'].includes(status)) {
@@ -239,7 +248,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/users/:id/reset-password', async (req, res) => {
+  router.post('/api/v1/users/:id/reset-password', adminOnly, async (req, res) => {
     try {
       const result = await pgOrgRepo.resetUserPassword(
         String(req.params.id),
@@ -259,7 +268,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/users-roles', async (_req, res) => {
+  router.get('/api/v1/users-roles', adminOnly, async (_req, res) => {
     try {
       const roles = await pgOrgRepo.listRoles();
       return sendPgSuccess(res, roles);
@@ -268,7 +277,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/users-roles/:id', async (req, res) => {
+  router.put('/api/v1/users-roles/:id', adminOnly, async (req, res) => {
     try {
       const updated = await pgOrgRepo.updateRole(
         String(req.params.id),
@@ -314,7 +323,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/users-security-logs', async (req, res) => {
+  router.get('/api/v1/users-security-logs', adminOnly, async (req, res) => {
     try {
       const { action, status, search } = req.query as Record<string, string>;
       const list = await pgOrgRepo.listSecurityLogs({ action, status, search });
@@ -329,7 +338,15 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
   // ---------------------------------------------------------------------------
   router.get('/api/v1/patients', async (req, res) => {
     try {
-      const list = await pgPatientClinicalRepo.listPatients(req.query.q as string);
+      const actor = deps.getCurrentUser();
+      const scope = await resolveAuthorizedBranchScope(actor, (req.query.branchId as string) || (req.headers['x-branch-id'] as string));
+      if (!scope.allowed) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Branch access denied');
+      }
+      let list = await pgPatientClinicalRepo.listPatients(req.query.q as string);
+      if (scope.branchId) {
+        list = list.filter((p) => p.branchId === scope.branchId);
+      }
       return sendPgSuccess(res, list, { total: list.length });
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to list patients');
@@ -338,8 +355,12 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
 
   router.get('/api/v1/patients/:id', async (req, res) => {
     try {
+      const actor = deps.getCurrentUser();
       const patient = await pgPatientClinicalRepo.findPatientByIdentifier(String(req.params.id));
       if (!patient) return sendPgError(res, 404, 'NOT_FOUND', 'Patient not found');
+      if (patient.branchId && !(await canUserAccessBranch(actor, patient.branchId))) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Cross-branch patient access denied');
+      }
 
       const [aptsRes, consultations, prescriptions, packages, invoices] = await Promise.all([
         pgPatientClinicalRepo.listAppointments({ patientId: patient.id, limit: 200 }),
@@ -364,6 +385,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
 
   router.post('/api/v1/patients', async (req, res) => {
     try {
+      const actor = deps.getCurrentUser();
       const schema = z.object({
         name: z.string().min(2, 'Name must be at least 2 characters'),
         nameBn: z.string().optional(),
@@ -375,7 +397,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
         bloodGroup: z.string().optional(),
         address: z.string().optional(),
         city: z.string().default('Dhaka'),
-        branchId: z.string().default('br-dhanmondi'),
+        branchId: z.string().default(actor.branchId || 'br-dhanmondi'),
         allergies: z.array(z.string()).optional(),
         medicalHistory: z.string().optional(),
         skinType: z.enum(['normal', 'dry', 'oily', 'combination', 'sensitive']).optional(),
@@ -384,9 +406,12 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
       if (!parsed.success) {
         return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid patient data', parsed.error.format());
       }
+      if (!(await canUserAccessBranch(actor, parsed.data.branchId))) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Cannot create patient in unauthorized branch');
+      }
       const created = await pgPatientClinicalRepo.createPatient(
         parsed.data,
-        deps.getCurrentUser(),
+        actor,
         extractClientIp(req.headers)
       );
       return sendPgSuccess(res, created, {}, 201);
@@ -397,10 +422,16 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
 
   const handlePatientUpdate = async (req: Request, res: Response) => {
     try {
+      const actor = deps.getCurrentUser();
+      const existing = await pgPatientClinicalRepo.findPatientByIdentifier(String(req.params.id));
+      if (!existing) return sendPgError(res, 404, 'NOT_FOUND', 'Patient not found');
+      if (existing.branchId && !(await canUserAccessBranch(actor, existing.branchId))) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Cross-branch patient update denied');
+      }
       const updated = await pgPatientClinicalRepo.updatePatient(
         String(req.params.id),
         req.body || {},
-        deps.getCurrentUser(),
+        actor,
         extractClientIp(req.headers)
       );
       if (!updated) return sendPgError(res, 404, 'NOT_FOUND', 'Patient not found');
@@ -807,7 +838,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/packages/master', async (req, res) => {
+  router.post('/api/v1/packages/master', adminOnly, async (req, res) => {
     try {
       const body = req.body || {};
       if (!body.name || !body.totalSessions || !body.packagePriceBDT) {
@@ -829,7 +860,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/packages', async (req, res) => {
+  router.post('/api/v1/packages', billingRoles, async (req, res) => {
     try {
       const body = req.body || {};
       if (!body.patientId || !body.patientName || !body.packageName || !body.totalSessions) {
@@ -846,7 +877,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/packages/:id/payments', deps.checkIdempotency, async (req, res) => {
+  router.post('/api/v1/packages/:id/payments', billingRoles, deps.checkIdempotency, async (req, res) => {
     try {
       const schema = z.object({
         amountBDT: z.number().positive('Payment amount must be greater than zero'),
@@ -870,7 +901,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/packages/deduct-session', deps.checkIdempotency, async (req, res) => {
+  router.post('/api/v1/packages/deduct-session', clinicalRoles, deps.checkIdempotency, async (req, res) => {
     try {
       const actor = deps.getCurrentUser();
       const schema = z.object({
@@ -900,21 +931,30 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
   // ---------------------------------------------------------------------------
   router.get('/api/v1/invoices', async (req, res) => {
     try {
-      const list = await pgBillingPackageRepo.listInvoices({
+      const actor = deps.getCurrentUser();
+      const scope = await resolveAuthorizedBranchScope(actor, req.query.branchId as string);
+      if (!scope.allowed) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Branch access denied');
+      }
+      let list = await pgBillingPackageRepo.listInvoices({
         patientId: req.query.patientId as string,
         status: req.query.status as string,
       });
+      if (scope.branchId) {
+        list = list.filter((inv) => inv.branchId === scope.branchId);
+      }
       return sendPgSuccess(res, list);
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to list invoices');
     }
   });
 
-  router.post('/api/v1/invoices', deps.checkIdempotency, async (req, res) => {
+  router.post('/api/v1/invoices', billingRoles, deps.checkIdempotency, async (req, res) => {
     try {
+      const actor = deps.getCurrentUser();
       const schema = z.object({
         patientId: z.string(),
-        branchId: z.string().default('br-dhanmondi'),
+        branchId: z.string().default(actor.branchId || 'br-dhanmondi'),
         items: z
           .array(
             z.object({
@@ -932,9 +972,12 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
       if (!parsed.success) {
         return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid invoice items', parsed.error.format());
       }
+      if (!(await canUserAccessBranch(actor, parsed.data.branchId))) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Cannot issue invoice in unauthorized branch');
+      }
       const created = await pgBillingPackageRepo.createInvoice(
         parsed.data,
-        deps.getCurrentUser(),
+        actor,
         extractClientIp(req.headers)
       );
       deps.saveIdempotency(req.headers['idempotency-key'] as string, 201, { data: created });
@@ -944,7 +987,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/invoices/:id/payments', deps.checkIdempotency, async (req, res) => {
+  router.post('/api/v1/invoices/:id/payments', billingRoles, deps.checkIdempotency, async (req, res) => {
     try {
       const schema = z.object({
         amountBDT: z.number().positive('Payment amount must be greater than zero'),
@@ -968,7 +1011,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/invoices/:id/void', async (req, res) => {
+  router.post('/api/v1/invoices/:id/void', adminOnly, async (req, res) => {
     try {
       const schema = z.object({
         reason: z.string().min(5, 'Reason for voiding must be at least 5 characters'),
@@ -995,16 +1038,21 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/daily-closings', async (req, res) => {
+  router.get('/api/v1/daily-closings', billingRoles, async (req, res) => {
     try {
-      const list = await pgBillingPackageRepo.listDailyClosings(req.query.branchId as string);
+      const actor = deps.getCurrentUser();
+      const scope = await resolveAuthorizedBranchScope(actor, req.query.branchId as string);
+      if (!scope.allowed) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Branch access denied');
+      }
+      const list = await pgBillingPackageRepo.listDailyClosings(scope.branchId);
       return sendPgSuccess(res, list, { total: list.length });
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to load daily closing reports');
     }
   });
 
-  router.post('/api/v1/daily-closings', async (req, res) => {
+  router.post('/api/v1/daily-closings', billingRoles, async (req, res) => {
     try {
       const body = req.body || {};
       if (!body.closingDate) {

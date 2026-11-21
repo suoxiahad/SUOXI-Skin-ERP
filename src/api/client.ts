@@ -59,19 +59,26 @@ import type {
 } from '@suoxi/shared-types';
 
 let cachedCsrfToken: string | null = null;
+const API_ORIGIN = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_ORIGIN?.replace(/\/+$/, '') || '';
 
-async function getCsrfToken(): Promise<string> {
-  if (cachedCsrfToken) return cachedCsrfToken;
-  try {
-    const res = await fetch('/api/v1/csrf-token', { credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to fetch CSRF token');
-    const json = (await res.json()) as ApiResponse<{ csrfToken: string }>;
-    cachedCsrfToken = json.data.csrfToken;
-    return cachedCsrfToken;
-  } catch (err) {
-    console.warn('Could not retrieve CSRF token:', err);
-    return 'fallback-csrf-token';
+function resolveEndpoint(endpoint: string): string {
+  if (/^https?:\/\//i.test(endpoint)) return endpoint;
+  return `${API_ORIGIN}${endpoint}`;
+}
+
+async function getCsrfToken(forceRefresh = false): Promise<string> {
+  if (cachedCsrfToken && !forceRefresh) return cachedCsrfToken;
+  const res = await fetch(resolveEndpoint('/api/v1/csrf-token'), { credentials: 'include' });
+  if (!res.ok) {
+    throw new ApiClientError(res.status, {
+      code: 'CSRF_FETCH_FAILED',
+      message: 'Failed to retrieve CSRF security token from server.',
+      requestId: 'unknown',
+    });
   }
+  const json = (await res.json()) as ApiResponse<{ csrfToken: string }>;
+  cachedCsrfToken = json.data.csrfToken;
+  return cachedCsrfToken;
 }
 
 export class ApiClientError extends Error {
@@ -92,6 +99,7 @@ export class ApiClientError extends Error {
 
 interface RequestOptions extends RequestInit {
   idempotent?: boolean;
+  _csrfRetried?: boolean;
 }
 
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<{ data: T; meta?: Record<string, unknown> }> {
@@ -100,16 +108,21 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json');
 
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    const csrf = await getCsrfToken();
+  const isMutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+  if (isMutating) {
+    const csrf = await getCsrfToken(Boolean(options._csrfRetried));
     headers.set('x-csrf-token', csrf);
 
-    if (options.idempotent) {
-      headers.set('idempotency-key', `idem-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`);
+    if (options.idempotent && !headers.has('idempotency-key')) {
+      const rand =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+      headers.set('idempotency-key', `idem-${rand}`);
     }
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(resolveEndpoint(endpoint), {
     credentials: 'include',
     ...options,
     headers,
@@ -129,8 +142,8 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
       });
     }
   } else {
-    // Non-JSON response (e.g. 502/503 Cloud Run gateway error or 404 HTML fallback)
-    const text = await response.text();
+    // Non-JSON response (e.g. 502/503 proxy gateway error or 404 HTML fallback)
+    await response.text();
     if (!response.ok) {
       throw new ApiClientError(response.status, {
         code: `HTTP_${response.status}`,
@@ -141,7 +154,6 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
         requestId: 'unknown',
       });
     }
-    // If status 200 was returned with HTML on an API route, it's an unrouted fallback
     throw new ApiClientError(500, {
       code: 'API_HTML_FALLBACK',
       message: 'API endpoint returned HTML instead of JSON. Server is initializing or route is missing.',
@@ -151,6 +163,15 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
   if (!response.ok) {
     const errorBody = body as ApiError;
+    if (
+      response.status === 403 &&
+      errorBody?.error?.code === 'CSRF_INVALID' &&
+      isMutating &&
+      !options._csrfRetried
+    ) {
+      cachedCsrfToken = null;
+      return request<T>(endpoint, { ...options, headers, _csrfRetried: true });
+    }
     throw new ApiClientError(response.status, errorBody.error || {
       code: 'REQUEST_FAILED',
       message: `HTTP error ${response.status}`,

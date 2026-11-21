@@ -29,34 +29,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   const rawSessionId = cookies[sessionCookieName] || cookies[SESSION_COOKIE_NAME];
 
   if (!rawSessionId) {
-    req.sessionId = 'dev-staff-session';
-    req.accessContext = {
-      userId: 'usr-101',
-      user: {
-        id: 'usr-101',
-        fullName: 'Dr. Nusrat Jahan',
-        email: 'nusrat.jahan@suoxiclinic.com',
-        role: 'super_admin',
-        roles: ['super_admin', 'admin', 'doctor', 'cashier'],
-        branchId: 'br-dhanmondi',
-        status: 'active',
-      } as any,
-      roles: ['super_admin', 'admin', 'doctor', 'cashier'],
-      branchId: 'br-dhanmondi',
-      effectivePermissions: new Set([
-        'referral.view',
-        'referral.create',
-        'referral.edit',
-        'referral.delete',
-        'commission.view',
-        'commission.approve',
-        'commission.rule_manage',
-        'payout.view',
-        'payout.create',
-      ]),
-      hasPermission: () => true,
-    } as any;
-    return next();
+    return next(new UnauthorizedError('Authentication required: Missing staff session cookie'));
   }
 
   const sessionHash = hashSessionId(rawSessionId);
@@ -64,34 +37,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   const session = await store.getSessionByHash(sessionHash);
 
   if (!session) {
-    req.sessionId = 'dev-staff-session';
-    req.accessContext = {
-      userId: 'usr-101',
-      user: {
-        id: 'usr-101',
-        fullName: 'Dr. Nusrat Jahan',
-        email: 'nusrat.jahan@suoxiclinic.com',
-        role: 'super_admin',
-        roles: ['super_admin', 'admin', 'doctor', 'cashier'],
-        branchId: 'br-dhanmondi',
-        status: 'active',
-      } as any,
-      roles: ['super_admin', 'admin', 'doctor', 'cashier'],
-      branchId: 'br-dhanmondi',
-      effectivePermissions: new Set([
-        'referral.view',
-        'referral.create',
-        'referral.edit',
-        'referral.delete',
-        'commission.view',
-        'commission.approve',
-        'commission.rule_manage',
-        'payout.view',
-        'payout.create',
-      ]),
-      hasPermission: () => true,
-    } as any;
-    return next();
+    return next(new UnauthorizedError('Authentication required: Invalid or expired staff session'));
   }
 
   // Touch session activity
@@ -109,9 +55,6 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
 
   // Section B.5a Double-submit CSRF enforcement on unsafe mutating methods
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-    if (req.sessionId === 'dev-staff-session') {
-      return next();
-    }
     const headerToken = req.headers[CSRF_HEADER_NAME] as string | undefined;
     const cookieToken = cookies[getCookieName(CSRF_COOKIE_NAME)] || cookies[CSRF_COOKIE_NAME];
 

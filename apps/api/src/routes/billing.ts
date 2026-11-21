@@ -485,7 +485,10 @@ refundsRouter.post(
       }
       const parsed = ApproveRefundSchema.safeParse(req.body);
       const actor = extractActor(req);
-      const refund = await billingService.approveRefund(req.params.id, parsed.data || {}, actor);
+      const approvePayload = parsed.success
+        ? { notes: parsed.data.notes ?? undefined }
+        : {};
+      const refund = await billingService.approveRefund(req.params.id, approvePayload, actor);
       res.status(200).json({
         data: refund,
         meta: {
@@ -511,7 +514,15 @@ refundsRouter.post(
       }
       const parsed = MarkRefundPaidSchema.safeParse(req.body);
       const actor = extractActor(req);
-      const refund = await billingService.markRefundPaid(req.params.id, parsed.data || {}, actor);
+      const paidPayload = parsed.success
+        ? {
+            refundMethodId: parsed.data.refundMethodId ?? undefined,
+            refundMethodCode: parsed.data.refundMethodCode ?? undefined,
+            transactionReference: parsed.data.transactionReference ?? undefined,
+            notes: parsed.data.notes ?? undefined,
+          }
+        : {};
+      const refund = await billingService.markRefundPaid(req.params.id, paidPayload, actor);
       res.status(200).json({
         data: refund,
         meta: {

@@ -17,6 +17,11 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { User } from '../../src/types/index.ts';
+import {
+  canUserAccessBranch,
+  requireRoles,
+  resolveAuthorizedBranchScope,
+} from '../auth/rbacMiddleware.ts';
 import { isPostgresConfigured } from '../db/pgPool.ts';
 import { pgCallCenterReferralsRepo } from '../repositories/pgCallCenterReferralsRepo.ts';
 import {
@@ -121,14 +126,25 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     return next();
   });
 
+  const param = (v: string | string[] | undefined): string => (Array.isArray(v) ? v[0] || '' : v || '');
+
+  const adminOnly = requireRoles(['super_admin', 'admin_manager'], deps.getCurrentUser);
+  const inventoryRoles = requireRoles(['super_admin', 'admin_manager', 'inventory_manager'], deps.getCurrentUser);
+  const financeRoles = requireRoles(['super_admin', 'admin_manager', 'cashier'], deps.getCurrentUser);
+
   // ===========================================================================
   // 1. INVENTORY, STOCK ADJUSTMENTS, SUPPLIERS, PURCHASE ORDERS & GRN
   // ===========================================================================
 
   router.get('/api/v1/inventory', async (req, res) => {
     try {
+      const actor = deps.getCurrentUser();
+      const scope = await resolveAuthorizedBranchScope(actor, req.query.branchId as string | undefined);
+      if (!scope.allowed) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Branch access denied');
+      }
       const list = await pgInventoryRepo.listInventory({
-        branchId: req.query.branchId as string | undefined,
+        branchId: scope.branchId,
         category: req.query.category as string | undefined,
         productType: req.query.productType as string | undefined,
         status: req.query.status as string | undefined,
@@ -140,7 +156,8 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/inventory', async (req, res) => {
+  router.post('/api/v1/inventory', inventoryRoles, async (req, res) => {
+    const actor = deps.getCurrentUser();
     const schema = z.object({
       name: z.string().min(2),
       category: z.enum(['Serums & Peels', 'Laser Consumables', 'Injectables', 'Post-Care Creams', 'Disposables']),
@@ -157,19 +174,22 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
       sku: z.string().optional(),
       description: z.string().optional(),
       usageProtocol: z.string().optional(),
-      branchId: z.string().default('br-dhanmondi'),
-      branchName: z.string().default('Dhanmondi Main Center'),
+      branchId: z.string().default(actor.branchId || 'br-dhanmondi'),
+      branchName: z.string().default(actor.branchName || 'Dhanmondi Main Center'),
     });
 
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
       return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid product data', parsed.error.format());
     }
+    if (!(await canUserAccessBranch(actor, parsed.data.branchId))) {
+      return sendPgError(res, 403, 'FORBIDDEN', 'Cannot create inventory item in unauthorized branch');
+    }
 
     try {
       const created = await pgInventoryRepo.createInventoryItem(
         parsed.data,
-        deps.getCurrentUser(),
+        actor,
         extractClientIp(req.headers, req.ip)
       );
       return sendPgSuccess(res, created, {}, 201);
@@ -187,7 +207,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/inventory/adjust', deps.checkIdempotency, async (req, res) => {
+  router.post('/api/v1/inventory/adjust', inventoryRoles, deps.checkIdempotency, async (req, res) => {
     const schema = z.object({
       itemId: z.string(),
       adjustmentType: z.enum(['damaged', 'expired', 'clinic_use', 'restock', 'tester', 'audit_correction']),
@@ -224,7 +244,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/inventory/suppliers', async (req, res) => {
+  router.post('/api/v1/inventory/suppliers', inventoryRoles, async (req, res) => {
     const schema = z.object({
       name: z.string().min(2),
       contactPerson: z.string().min(2),
@@ -262,7 +282,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/inventory/purchases', async (req, res) => {
+  router.post('/api/v1/inventory/purchases', inventoryRoles, async (req, res) => {
     const schema = z.object({
       supplierId: z.string(),
       expectedDeliveryDate: z.string(),
@@ -295,7 +315,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/inventory/purchases/:id/receive', async (req, res) => {
+  router.post('/api/v1/inventory/purchases/:id/receive', inventoryRoles, async (req, res) => {
     const schema = z.object({
       invoiceRefNumber: z.string().optional(),
       notes: z.string().optional(),
@@ -319,7 +339,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
     try {
       const result = await pgInventoryRepo.receiveGRN(
-        req.params.id,
+        param(req.params.id),
         parsed.data,
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
@@ -339,10 +359,10 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.patch('/api/v1/inventory/:id', async (req, res) => {
+  router.patch('/api/v1/inventory/:id', inventoryRoles, async (req, res) => {
     try {
       const updated = await pgInventoryRepo.updateInventoryItem(
-        req.params.id,
+        param(req.params.id),
         req.body,
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
@@ -398,7 +418,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
     try {
       const updated = await pgCallCenterReferralsRepo.updateCallTask(
-        req.params.id,
+        param(req.params.id),
         parsed.data,
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
@@ -463,7 +483,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
     try {
       const created = await pgCallCenterReferralsRepo.assignPatientReferrer(
-        req.params.patientId,
+        param(req.params.patientId),
         parsed.data,
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
@@ -476,7 +496,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
   router.get('/api/v1/referrals/patients/:patientId/history', async (req, res) => {
     try {
-      const data = await pgCallCenterReferralsRepo.getPatientReferralHistory(req.params.patientId);
+      const data = await pgCallCenterReferralsRepo.getPatientReferralHistory(param(req.params.patientId));
       return sendPgSuccess(res, data);
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to load patient referral history');
@@ -487,9 +507,9 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     try {
       const actor = deps.getCurrentUser();
       const revealSecrets = actor.role === 'super_admin';
-      const detail = await pgCallCenterReferralsRepo.getReferrerDetail(req.params.id, revealSecrets);
+      const detail = await pgCallCenterReferralsRepo.getReferrerDetail(param(req.params.id), revealSecrets);
       if (!detail) {
-        return sendPgError(res, 404, 'NOT_FOUND', `Referrer '${req.params.id}' not found`);
+        return sendPgError(res, 404, 'NOT_FOUND', `Referrer '${param(req.params.id)}' not found`);
       }
       return sendPgSuccess(res, detail);
     } catch (err) {
@@ -501,9 +521,9 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     try {
       const actor = deps.getCurrentUser();
       const revealSecrets = actor.role === 'super_admin';
-      const ref = await pgCallCenterReferralsRepo.getReferrerById(req.params.id, revealSecrets);
+      const ref = await pgCallCenterReferralsRepo.getReferrerById(param(req.params.id), revealSecrets);
       if (!ref) {
-        return sendPgError(res, 404, 'NOT_FOUND', `Referrer '${req.params.id}' not found`);
+        return sendPgError(res, 404, 'NOT_FOUND', `Referrer '${param(req.params.id)}' not found`);
       }
       return sendPgSuccess(res, ref);
     } catch (err) {
@@ -519,13 +539,13 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
     try {
       const updated = await pgCallCenterReferralsRepo.updateReferrer(
-        req.params.id,
+        param(req.params.id),
         parsed.data,
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
       );
       if (!updated) {
-        return sendPgError(res, 404, 'NOT_FOUND', `Referrer '${req.params.id}' not found`);
+        return sendPgError(res, 404, 'NOT_FOUND', `Referrer '${param(req.params.id)}' not found`);
       }
       return sendPgSuccess(res, updated);
     } catch (err) {
@@ -547,7 +567,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/commissions/approve', async (req, res) => {
+  router.post('/api/v1/commissions/approve', adminOnly, async (req, res) => {
     const parsed = approveCommissionsSchema.safeParse(req.body);
     if (!parsed.success) {
       return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid approval payload', parsed.error.format());
@@ -578,7 +598,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/commissions/rules', async (req, res) => {
+  router.post('/api/v1/commissions/rules', adminOnly, async (req, res) => {
     const parsed = createCommissionRuleSchema.safeParse(req.body);
     if (!parsed.success) {
       return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid commission rule payload', parsed.error.format());
@@ -596,7 +616,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.patch('/api/v1/commissions/rules/:id', async (req, res) => {
+  router.patch('/api/v1/commissions/rules/:id', adminOnly, async (req, res) => {
     const parsed = createCommissionRuleSchema.partial().safeParse(req.body);
     if (!parsed.success) {
       return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid commission rule update payload', parsed.error.format());
@@ -604,13 +624,13 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
     try {
       const updated = await pgCallCenterReferralsRepo.updateCommissionRule(
-        req.params.id,
+        param(req.params.id),
         parsed.data,
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
       );
       if (!updated) {
-        return sendPgError(res, 404, 'NOT_FOUND', `Commission rule '${req.params.id}' not found`);
+        return sendPgError(res, 404, 'NOT_FOUND', `Commission rule '${param(req.params.id)}' not found`);
       }
       return sendPgSuccess(res, updated);
     } catch (err) {
@@ -618,7 +638,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/commissions/payouts', async (req, res) => {
+  router.get('/api/v1/commissions/payouts', financeRoles, async (req, res) => {
     try {
       const list = await pgCallCenterReferralsRepo.listPayouts({
         referrerId: req.query.referrerId as string | undefined,
@@ -629,7 +649,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/commissions/payouts', async (req, res) => {
+  router.post('/api/v1/commissions/payouts', financeRoles, async (req, res) => {
     const parsed = createPayoutSchema.safeParse(req.body);
     if (!parsed.success) {
       return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid payout payload', parsed.error.format());
@@ -650,15 +670,20 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/commissions/process-outbox', async (_req, res) => {
-    return sendPgSuccess(res, { processed: 0, mode: 'postgresql_direct' });
+  router.post('/api/v1/commissions/process-outbox', adminOnly, async (_req, res) => {
+    try {
+      const result = await pgCallCenterReferralsRepo.processCommissionOutbox();
+      return sendPgSuccess(res, { ...result, mode: 'postgresql_outbox' });
+    } catch (err) {
+      return handlePgRouteError(res, err, 'Failed to process commission outbox');
+    }
   });
 
   // ===========================================================================
   // 4. AUDIT EVENTS
   // ===========================================================================
 
-  router.get('/api/v1/audit-events', async (req, res) => {
+  router.get('/api/v1/audit-events', adminOnly, async (req, res) => {
     try {
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 250;
       const list = await pgOpsSettingsRepo.listAuditEvents(limit);
@@ -672,7 +697,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
   // 5. INTEGRATIONS: SMS (msg.mram.com.bd) & EMAIL (cPanel SMTP)
   // ===========================================================================
 
-  router.get('/api/v1/integration/sms/config', async (_req, res) => {
+  router.get('/api/v1/integration/sms/config', adminOnly, async (_req, res) => {
     try {
       const cfg = await pgOpsSettingsRepo.getSmsConfig();
       return sendPgSuccess(res, cfg);
@@ -681,7 +706,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/integration/sms/config', async (req, res) => {
+  router.put('/api/v1/integration/sms/config', adminOnly, async (req, res) => {
     try {
       const saved = await pgOpsSettingsRepo.updateSmsConfig(
         req.body || {},
@@ -752,7 +777,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
 
   router.put('/api/v1/integration/sms/templates/:id', async (req, res) => {
     try {
-      const updated = await pgOpsSettingsRepo.updateSmsTemplate(req.params.id, req.body || {});
+      const updated = await pgOpsSettingsRepo.updateSmsTemplate(param(req.params.id), req.body || {});
       if (!updated) {
         return sendPgError(res, 404, 'NOT_FOUND', 'SMS template not found');
       }
@@ -762,7 +787,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/integration/email/config', async (_req, res) => {
+  router.get('/api/v1/integration/email/config', adminOnly, async (_req, res) => {
     try {
       const cfg = await pgOpsSettingsRepo.getEmailConfig();
       return sendPgSuccess(res, cfg);
@@ -771,7 +796,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/integration/email/config', async (req, res) => {
+  router.put('/api/v1/integration/email/config', adminOnly, async (req, res) => {
     try {
       const saved = await pgOpsSettingsRepo.updateEmailConfig(
         req.body || {},
@@ -784,7 +809,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/integration/email/send-test', async (req, res) => {
+  router.post('/api/v1/integration/email/send-test', adminOnly, async (req, res) => {
     const { recipientEmail, subject } = req.body || {};
     if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
       return sendPgError(res, 400, 'INVALID_EMAIL', 'A valid recipient email address is required');
@@ -802,7 +827,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/integration/email/logs', async (_req, res) => {
+  router.get('/api/v1/integration/email/logs', adminOnly, async (_req, res) => {
     try {
       const list = await pgOpsSettingsRepo.listEmailLogs();
       return sendPgSuccess(res, list, { total: list.length });
@@ -811,7 +836,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/integration/email/templates', async (_req, res) => {
+  router.get('/api/v1/integration/email/templates', adminOnly, async (_req, res) => {
     try {
       const list = await pgOpsSettingsRepo.listEmailTemplates();
       return sendPgSuccess(res, list, { total: list.length });
@@ -820,9 +845,9 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/integration/email/templates/:id', async (req, res) => {
+  router.put('/api/v1/integration/email/templates/:id', adminOnly, async (req, res) => {
     try {
-      const updated = await pgOpsSettingsRepo.updateEmailTemplate(req.params.id, req.body || {});
+      const updated = await pgOpsSettingsRepo.updateEmailTemplate(param(req.params.id), req.body || {});
       if (!updated) {
         return sendPgError(res, 404, 'NOT_FOUND', 'Email template not found');
       }
@@ -845,7 +870,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/settings/general', async (req, res) => {
+  router.put('/api/v1/settings/general', adminOnly, async (req, res) => {
     try {
       const saved = await pgOpsSettingsRepo.updateGeneralSettings(
         req.body || {},
@@ -867,7 +892,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/settings/scheduling', async (req, res) => {
+  router.put('/api/v1/settings/scheduling', adminOnly, async (req, res) => {
     try {
       const saved = await pgOpsSettingsRepo.updateSchedulingSettings(
         req.body || {},
@@ -880,7 +905,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/settings/security', async (_req, res) => {
+  router.get('/api/v1/settings/security', adminOnly, async (_req, res) => {
     try {
       const data = await pgOpsSettingsRepo.getSecuritySettings();
       return sendPgSuccess(res, data);
@@ -889,7 +914,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/settings/security', async (req, res) => {
+  router.put('/api/v1/settings/security', adminOnly, async (req, res) => {
     try {
       const saved = await pgOpsSettingsRepo.updateSecuritySettings(
         req.body || {},
@@ -902,7 +927,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/settings/backups', async (_req, res) => {
+  router.get('/api/v1/settings/backups', adminOnly, async (_req, res) => {
     try {
       const list = await pgOpsSettingsRepo.listBackups();
       return sendPgSuccess(res, list, { total: list.length });
@@ -911,7 +936,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/settings/backups/create', async (req, res) => {
+  router.post('/api/v1/settings/backups/create', adminOnly, async (req, res) => {
     try {
       const backupType = (req.body?.backupType || 'manual') as 'auto_daily' | 'manual' | 'pre_update';
       const created = await pgOpsSettingsRepo.createBackupRecord(
@@ -925,9 +950,9 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/settings/backups/download/:id', async (req, res) => {
+  router.get('/api/v1/settings/backups/download/:id', adminOnly, async (req, res) => {
     try {
-      const bkp = await pgOpsSettingsRepo.getBackupById(req.params.id);
+      const bkp = await pgOpsSettingsRepo.getBackupById(param(req.params.id));
       if (!bkp) {
         return sendPgError(res, 404, 'NOT_FOUND', 'Backup snapshot not found');
       }
@@ -960,10 +985,10 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/settings/backups/restore/:id', async (req, res) => {
+  router.post('/api/v1/settings/backups/restore/:id', adminOnly, async (req, res) => {
     try {
       const result = await pgOpsSettingsRepo.recordBackupRestore(
-        req.params.id,
+        param(req.params.id),
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
       );
@@ -976,7 +1001,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.get('/api/v1/settings/sessions', async (req, res) => {
+  router.get('/api/v1/settings/sessions', adminOnly, async (req, res) => {
     try {
       const currentSessionId = (req as Request & { sessionId?: string }).sessionId;
       const list = await pgOpsSettingsRepo.listActiveSessions(currentSessionId);
@@ -986,10 +1011,10 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/settings/sessions/revoke/:id', async (req, res) => {
+  router.post('/api/v1/settings/sessions/revoke/:id', adminOnly, async (req, res) => {
     try {
       const revoked = await pgOpsSettingsRepo.revokeSession(
-        req.params.id,
+        param(req.params.id),
         deps.getCurrentUser(),
         extractClientIp(req.headers, req.ip)
       );
@@ -1005,7 +1030,7 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
     }
   });
 
-  router.post('/api/v1/settings/sessions/revoke-all', async (req, res) => {
+  router.post('/api/v1/settings/sessions/revoke-all', adminOnly, async (req, res) => {
     try {
       const currentSessionId = (req as Request & { sessionId?: string }).sessionId;
       const count = await pgOpsSettingsRepo.revokeAllOtherSessions(

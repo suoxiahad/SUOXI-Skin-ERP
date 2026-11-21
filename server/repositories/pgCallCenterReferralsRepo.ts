@@ -23,14 +23,10 @@ import {
 // AES-256-GCM Encryption Helpers for Referrer Payout Account Details
 // =============================================================================
 
-const FALLBACK_DEV_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+import { getEncryptionMasterKey } from '../config/securityConfig.ts';
 
 function getPayoutEncryptionKey(): Buffer {
-  const raw = process.env.APP_MASTER_KEY || process.env.SESSION_SECRET || FALLBACK_DEV_KEY;
-  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
-    return Buffer.from(raw, 'hex');
-  }
-  return crypto.createHash('sha256').update(raw).digest();
+  return getEncryptionMasterKey();
 }
 
 interface EncryptedPayoutPayload {
@@ -1370,5 +1366,180 @@ export const pgCallCenterReferralsRepo = {
 
       return mapPayoutRow(insPayout.rows[0] as Record<string, unknown>, paidCommissions);
     });
+  },
+
+  /**
+   * Processes pending `domain_outbox_events` (`payment.recorded`, `payment.refunded`)
+   * idempotently into `referral_commissions` using `accrual_key`.
+   */
+  async processCommissionOutbox(limit = 25): Promise<{ processed: number; accrued: number; reversed: number }> {
+    let processed = 0;
+    let accrued = 0;
+    let reversed = 0;
+
+    const eventsRes = await pgQuery<{
+      id: string;
+      event_type: string;
+      payload: Record<string, unknown>;
+    }>(
+      `
+      SELECT id, event_type, payload
+      FROM domain_outbox_events
+      WHERE status = 'pending' AND event_type IN ('payment.recorded', 'payment.refunded')
+      ORDER BY created_at ASC
+      LIMIT $1
+      `,
+      [limit]
+    );
+
+    for (const ev of eventsRes.rows) {
+      await withPgTransaction(async (client) => {
+        const lock = await client.query<{ status: string }>(
+          'SELECT status FROM domain_outbox_events WHERE id = $1 FOR UPDATE',
+          [ev.id]
+        );
+        if (lock.rows[0]?.status !== 'pending') return;
+
+        const payload = ev.payload || {};
+        const patientId = String(payload.patientId || '');
+        const invoiceId = String(payload.invoiceId || '');
+        const invoiceNumber = String(payload.invoiceNumber || invoiceId);
+        const paymentId = payload.paymentId ? String(payload.paymentId) : null;
+        const amountBDT = toNumber(payload.amountBDT, 0);
+
+        if (patientId && invoiceId && amountBDT > 0) {
+          const attrRes = await client.query<{
+            referrer_id: string;
+            referrer_code: string;
+            referrer_name: string;
+            referrer_type: string;
+            referrer_phone: string;
+            patient_name: string;
+            patient_code: string;
+          }>(
+            `
+            SELECT pr.referrer_id, r.code AS referrer_code, r.name AS referrer_name,
+                   r.referrer_type, COALESCE(r.phone, '') AS referrer_phone,
+                   p.name AS patient_name, p.patient_id_code AS patient_code
+            FROM patient_referrals pr
+            JOIN referrers r ON r.id = pr.referrer_id AND r.status = 'active'
+            JOIN patients p ON p.id = pr.patient_id
+            WHERE pr.patient_id = $1 AND pr.is_current = TRUE
+            LIMIT 1
+            `,
+            [patientId]
+          );
+
+          if ((attrRes.rowCount || 0) > 0) {
+            const attr = attrRes.rows[0];
+            const ruleRes = await client.query<{
+              id: string;
+              name: string;
+              calculation_type: string;
+              rate_value: string;
+              withholding_tax_percent: string;
+              min_base_amount: string;
+              max_commission_amount: string | null;
+            }>(
+              `
+              SELECT id, name, calculation_type, rate_value, withholding_tax_percent,
+                     COALESCE(min_base_amount, 0) AS min_base_amount, max_commission_amount
+              FROM commission_rules
+              WHERE is_active = TRUE
+                AND (referrer_type = $1 OR referrer_type = 'all' OR referrer_type IS NULL)
+              ORDER BY CASE WHEN referrer_type = $1 THEN 0 ELSE 1 END, created_at DESC
+              LIMIT 1
+              `,
+              [attr.referrer_type]
+            );
+
+            if ((ruleRes.rowCount || 0) > 0) {
+              const rule = ruleRes.rows[0];
+              const rateVal = toNumber(rule.rate_value, 0);
+              const whtPct = toNumber(rule.withholding_tax_percent, 0);
+              const minBase = toNumber(rule.min_base_amount, 0);
+              const maxComm = rule.max_commission_amount !== null ? toNumber(rule.max_commission_amount) : null;
+
+              if (amountBDT >= minBase && rateVal > 0) {
+                let computed =
+                  rule.calculation_type === 'fixed'
+                    ? rateVal
+                    : Number(((amountBDT * rateVal) / 100).toFixed(2));
+                if (maxComm !== null && computed > maxComm) computed = maxComm;
+                const wht = Number(((computed * whtPct) / 100).toFixed(2));
+                const net = Number((computed - wht).toFixed(2));
+
+                const isReversal = ev.event_type === 'payment.refunded';
+                const sign = isReversal ? -1 : 1;
+                const accrualKey = `${ev.event_type}:${paymentId || invoiceId}:${ev.id}`;
+                const commId = `comm-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+                const commCode = `COM-${crypto.randomInt(10000, 99999)}`;
+
+                const ins = await client.query(
+                  `
+                  INSERT INTO referral_commissions (
+                    id, commission_code, referrer_id, referrer_code, referrer_name, referrer_type, phone,
+                    patient_id, patient_name, patient_code, invoice_id, invoice_number, payment_id,
+                    rule_id, rule_name, service_category, kind, status,
+                    applied_calculation_type, commission_percentage, applied_basis,
+                    bill_amount_bdt, commission_amount_bdt, withholding_percent,
+                    withholding_amount_bdt, net_amount_bdt, accrual_key
+                  )
+                  VALUES (
+                    $1, $2, $3, $4, $5, $6, $7,
+                    $8, $9, $10, $11, $12, $13,
+                    $14, $15, 'Billing', $16, $17,
+                    $18, $19, 'paid_amount',
+                    $20, $21, $22, $23, $24, $25
+                  )
+                  ON CONFLICT (accrual_key) WHERE accrual_key IS NOT NULL DO NOTHING
+                  RETURNING id
+                  `,
+                  [
+                    commId,
+                    commCode,
+                    attr.referrer_id,
+                    attr.referrer_code,
+                    attr.referrer_name,
+                    attr.referrer_type,
+                    attr.referrer_phone,
+                    patientId,
+                    attr.patient_name,
+                    attr.patient_code,
+                    invoiceId,
+                    invoiceNumber,
+                    paymentId,
+                    rule.id,
+                    rule.name,
+                    isReversal ? 'reversal' : 'accrual',
+                    isReversal ? 'reversed' : 'pending',
+                    rule.calculation_type,
+                    rateVal,
+                    Number((amountBDT * sign).toFixed(2)),
+                    Number((computed * sign).toFixed(2)),
+                    whtPct,
+                    Number((wht * sign).toFixed(2)),
+                    Number((net * sign).toFixed(2)),
+                    accrualKey,
+                  ]
+                );
+                if ((ins.rowCount || 0) > 0) {
+                  if (isReversal) reversed++;
+                  else accrued++;
+                }
+              }
+            }
+          }
+        }
+
+        await client.query(
+          `UPDATE domain_outbox_events SET status = 'processed', processed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+          [ev.id]
+        );
+        processed++;
+      });
+    }
+
+    return { processed, accrued, reversed };
   },
 };

@@ -316,6 +316,7 @@ export async function runPackageLedgerFlowTests(): Promise<void> {
     });
     const singlePkg = ((await singleSessionPkgRes.json()) as any).data as PackageDto;
 
+    const todayIso = new Date().toISOString().slice(0, 10);
     const assignSingleRes = await fetch(`${baseUrl}/api/v1/packages/assign`, {
       method: 'POST',
       headers: {
@@ -327,8 +328,8 @@ export async function runPackageLedgerFlowTests(): Promise<void> {
       body: JSON.stringify({
         patientId: 'pt-sumaiya-01',
         packageId: singlePkg.id,
-        purchaseDate: '2026-10-05',
-        startDate: '2026-10-05',
+        purchaseDate: todayIso,
+        startDate: todayIso,
       }),
     });
     const assignedSingle = ((await assignSingleRes.json()) as any).data as PatientPackageDto;

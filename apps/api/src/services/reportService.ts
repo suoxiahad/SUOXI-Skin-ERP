@@ -83,23 +83,23 @@ export class ReportService {
     const branchId = rawBranchId !== undefined ? String(rawBranchId) : undefined;
 
     // Invoices and payments from billingService
-    const invoices = (billingService as any).invoices ? Array.from((billingService as any).invoices.values()) : [];
-    const payments = (billingService as any).payments ? Array.from((billingService as any).payments.values()) : [];
-    const refunds = (billingService as any).refunds ? Array.from((billingService as any).refunds.values()) : [];
+    const invoices: any[] = (billingService as any).invoices ? Array.from((billingService as any).invoices.values()) : [];
+    const payments: any[] = (billingService as any).payments ? Array.from((billingService as any).payments.values()) : [];
+    const refunds: any[] = (billingService as any).refunds ? Array.from((billingService as any).refunds.values()) : [];
 
     // Filter by branch and date range
-    const rangeInvoices = invoices.filter((inv: any) => {
+    const rangeInvoices: any[] = invoices.filter((inv: any) => {
       if (branchId && String(inv.branchId) !== branchId) return false;
       return inv.invoiceDate >= from && inv.invoiceDate <= to && inv.status !== 'void';
     });
 
-    const rangePayments = payments.filter((pay: any) => {
+    const rangePayments: any[] = payments.filter((pay: any) => {
       if (branchId && String(pay.branchId) !== branchId) return false;
       const pDate = (pay.paymentDate || pay.createdAt || '').slice(0, 10);
       return pDate >= from && pDate <= to && pay.status !== 'reversed';
     });
 
-    const rangeRefunds = refunds.filter((rf: any) => {
+    const rangeRefunds: any[] = refunds.filter((rf: any) => {
       if (branchId && String(rf.branchId) !== branchId) return false;
       const rDate = (rf.refundDate || rf.createdAt || '').slice(0, 10);
       return rDate >= from && rDate <= to && rf.status === 'paid';
@@ -540,7 +540,8 @@ export class ReportService {
     ruleMap.set('inactive_patient_60d', { label: '60-Day Inactive Follow-up', count: 0, completed: 0 });
     ruleMap.set('lab_report_ready', { label: 'Lab Report Delivery Call', count: 0, completed: 0 });
 
-    for (const t of tasks) {
+    for (const rawTask of tasks) {
+      const t = rawTask as any;
       if (t.status === 'completed') completedTasks++;
       if (t.outcome === 'rescheduled') rescheduledAppointments++;
       if (t.outcome === 'unreachable') unreachableTasks++;
@@ -549,7 +550,7 @@ export class ReportService {
         outcomeMap.get(t.outcome)!.count++;
       }
 
-      const rType = t.rule_type || 'tomorrow_session_reminder';
+      const rType = t.rule_type || t.task_type || 'tomorrow_session_reminder';
       const rObj = ruleMap.get(rType) || { label: rType, count: 0, completed: 0 };
       rObj.count++;
       if (t.status === 'completed') rObj.completed++;
@@ -800,13 +801,12 @@ export class ReportService {
   ): Promise<ReferralReportDto> {
     const { from, to } = this.validateDateRange(params.from, params.to);
 
-    const referrersRes = referralService.listReferrers({ limit: 100 });
-    const referrers = referrersRes.referrers || [];
-    const commissionsRes = referralService.listCommissions({ page: 1, limit: 999999 });
-    const commissions = commissionsRes.commissions || [];
+    const referrersRes = await referralService.listReferrers({ limit: 100 }, accessContext as any);
+    const referrers: any[] = referrersRes.data || [];
+    const commissions: any[] = referralService.listCommissions({});
 
     const rangeCommissions = commissions.filter((c: any) => {
-      const d = (c.created_at || '').slice(0, 10);
+      const d = (c.created_at || c.createdAt || '').slice(0, 10);
       return d >= from && d <= to;
     });
 
@@ -815,7 +815,7 @@ export class ReportService {
     let commissionPending = 0;
 
     for (const c of rangeCommissions) {
-      const amt = Number(c.computed_amount || 0);
+      const amt = Number(c.computed_amount || c.netCommissionAmount || 0);
       totalCommissionAccrued += amt;
       if (c.status === 'paid') commissionPaid += amt;
       else if (c.status === 'accrued' || c.status === 'approved') commissionPending += amt;
@@ -827,9 +827,9 @@ export class ReportService {
       commissionPending = 22500;
     }
 
-    const referrerPerformance = referrers.map((r) => ({
+    const referrerPerformance = referrers.map((r: any) => ({
       referrerId: r.id,
-      referrerName: r.name,
+      referrerName: r.fullName || r.name || 'Referrer',
       tier: r.tier || 'Gold',
       patientCount: r.total_patients || 14,
       commissionAccrued: r.total_commission_accrued || 34000,
@@ -926,7 +926,7 @@ export class ReportService {
     const rawBranchId = params.branchId ?? (accessContext?.allBranches ? undefined : accessContext?.primaryBranchId);
     const branchId = rawBranchId !== undefined ? String(rawBranchId) : undefined;
 
-    const notifsRes = notificationService.listNotifications({
+    const notifsRes = await notificationService.listNotifications({
       date_from: from,
       date_to: to,
       page: 1,
@@ -960,7 +960,7 @@ export class ReportService {
         statusMap.get(n.status)!.count++;
       }
 
-      const tKey = n.template_code || 'appointment_reminder';
+      const tKey = String((n as any).template_code || n.template_id || 'appointment_reminder');
       const tObj = typeMap.get(tKey) || { label: tKey, count: 0 };
       tObj.count++;
       typeMap.set(tKey, tObj);

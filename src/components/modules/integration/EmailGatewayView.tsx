@@ -33,18 +33,18 @@ export const EmailGatewayView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'settings' | 'test' | 'templates' | 'automation' | 'logs'>('settings');
 
-  // Config State
+  // Config State (loaded from PostgreSQL via /api/v1/integration/email/config)
   const [config, setConfig] = useState<EmailGatewayConfig>({
     provider: 'cpanel_smtp',
     smtpHost: 'mail.suoxiclinic.com',
     smtpPort: 465,
     encryption: 'SSL/TLS',
     smtpUser: 'care@suoxiclinic.com',
-    smtpPass: 'Suoxi@Aesthetic#2026',
+    smtpPass: '',
     fromName: 'SUOXI Skin Care & Aesthetic Center',
     fromEmail: 'care@suoxiclinic.com',
     replyToEmail: 'support@suoxiclinic.com',
-    isActive: true,
+    isActive: false,
     lastTestedAt: new Date().toISOString(),
     autoEmailPrescription: true,
     autoEmailInvoice: true,

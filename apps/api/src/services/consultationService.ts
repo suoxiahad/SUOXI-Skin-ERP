@@ -160,10 +160,10 @@ export class ConsultationService {
     // If linked to an appointment, transition appointment status to visited
     if (req.appointmentId) {
       try {
-        await appointmentService.updateAppointmentStatus(
+        await appointmentService.updateAppointment(
           req.appointmentId,
-          { status: 'Visited', clinicalNotes: 'Consultation conducted' },
-          { id: user.id, fullName: user.fullName || 'Doctor', role: 'doctor' }
+          { status: 'visited', notes: 'Consultation conducted' } as any,
+          { id: user.id, name: user.fullName || 'Doctor', role: 'doctor' }
         );
       } catch {
         // Continue if appointment already updated

@@ -23,10 +23,12 @@ import {
   resolveSessionFromRequest,
 } from '../auth/productionAuth.ts';
 import { runWithAuthContext } from '../auth/requestContext.ts';
+import { canUserAccessBranch } from '../auth/rbacMiddleware.ts';
 import { getOrSetCache, invalidateCachePrefixes } from '../cache/dashboardCache.ts';
 import { checkRedisHealth, isRedisConfigured } from '../cache/redisClient.ts';
-import { isPostgresConfigured, pgQuery } from '../db/pgPool.ts';
+import { checkPgHealth, isPostgresConfigured, pgQuery } from '../db/pgPool.ts';
 import { enqueueClinicJob, getQueueStats } from '../queue/jobQueue.ts';
+import { pgGetFileAssetByPath, pgRecordFileAsset } from '../repositories/pgClinicalSessionsRepo.ts';
 import { extractClientIp, sendPgError, sendPgSuccess, toNumber } from '../repositories/pgHelpers.ts';
 import {
   getPrivateStorageHealth,
@@ -47,11 +49,13 @@ const uploadMiddleware = multer({
 
 const PUBLIC_API_PREFIXES = [
   '/api/v1/health',
+  '/api/v1/ready',
   '/api/v1/csrf-token',
   '/api/v1/auth/status',
   '/api/v1/auth/login',
   '/api/v1/auth/logout',
   '/api/v1/portal/',
+  '/api/v1/webhooks/',
 ];
 
 /**
@@ -132,6 +136,25 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
       redisConfigured: isRedisConfigured(),
     });
   });
+
+  const handleReadiness = async (_req: Request, res: Response) => {
+    const [pgHealth, redisHealth, storageHealth] = await Promise.all([
+      checkPgHealth(),
+      checkRedisHealth(),
+      Promise.resolve(getPrivateStorageHealth()),
+    ]);
+    const ready = (!isPostgresConfigured() && process.env.NODE_ENV !== 'production') || pgHealth.ok;
+    const status = ready ? 200 : 503;
+    return res.status(status).json({
+      status: ready ? 'ready' : 'not_ready',
+      postgres: pgHealth,
+      redis: redisHealth,
+      storage: storageHealth,
+      timestamp: new Date().toISOString(),
+    });
+  };
+  router.get('/api/v1/ready', handleReadiness);
+  router.get('/readyz', handleReadiness);
 
   router.get('/api/v1/auth/me', (req, res, next) => {
     const authed = req as AuthedRequest;
@@ -256,18 +279,36 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
 
   router.post('/api/v1/files/upload', (req, res) => {
     const contentType = req.headers['content-type'] || '';
+    const actor = resolveActor(req);
 
-    // Mode A: JSON base64 upload ({ dataUrl, category })
+    // Mode A: JSON base64 upload ({ dataUrl, category, patientId, originalFilename })
     if (contentType.includes('application/json')) {
-      const { dataUrl, category, docType } = req.body || {};
+      const { dataUrl, category, docType, patientId, originalFilename } = req.body || {};
       if (!dataUrl || typeof dataUrl !== 'string') {
         return sendPgError(res, 400, 'VALIDATION_ERROR', 'dataUrl (base64 data URI) is required');
       }
       savePrivateDataUrl(dataUrl, category || docType)
-        .then((stored) =>
-          sendPgSuccess(
+        .then(async (stored) => {
+          let assetId: string | undefined;
+          if (isPostgresConfigured()) {
+            const asset = await pgRecordFileAsset({
+              branchId: actor.branchId,
+              patientId: patientId ? String(patientId) : null,
+              category: String(category || docType || 'general'),
+              originalFilename: String(originalFilename || path.basename(stored.storagePath)),
+              storagePath: stored.storagePath,
+              mimeType: stored.mimeType,
+              fileExt: path.extname(stored.storagePath).replace('.', ''),
+              sizeBytes: stored.sizeBytes,
+              sha256Hash: stored.sha256,
+              uploadedBy: actor.id,
+            });
+            assetId = String(asset.id);
+          }
+          return sendPgSuccess(
             res,
             {
+              fileAssetId: assetId,
               storagePath: stored.storagePath,
               fileUrl: `/api/v1/files/view?path=${encodeURIComponent(stored.storagePath)}`,
               fileFormat: stored.fileFormat,
@@ -277,8 +318,8 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
             },
             {},
             201
-          )
-        )
+          );
+        })
         .catch((err) => {
           const e = err as Error & { statusCode?: number; code?: string };
           return sendPgError(res, e.statusCode || 400, e.code || 'UPLOAD_FAILED', e.message);
@@ -303,9 +344,26 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
           mimeType: file.mimetype,
           categoryOrType: category,
         });
+        let assetId: string | undefined;
+        if (isPostgresConfigured()) {
+          const asset = await pgRecordFileAsset({
+            branchId: actor.branchId,
+            patientId: req.body?.patientId ? String(req.body.patientId) : null,
+            category,
+            originalFilename: file.originalname || path.basename(stored.storagePath),
+            storagePath: stored.storagePath,
+            mimeType: stored.mimeType,
+            fileExt: path.extname(stored.storagePath).replace('.', ''),
+            sizeBytes: stored.sizeBytes,
+            sha256Hash: stored.sha256,
+            uploadedBy: actor.id,
+          });
+          assetId = String(asset.id);
+        }
         return sendPgSuccess(
           res,
           {
+            fileAssetId: assetId,
             storagePath: stored.storagePath,
             fileUrl: `/api/v1/files/view?path=${encodeURIComponent(stored.storagePath)}`,
             fileFormat: stored.fileFormat,
@@ -324,18 +382,29 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
     });
   });
 
-  // Stream private file safely by relative storagePath (strictly inside UPLOAD_DIR)
-  router.get('/api/v1/files/view', (req, res) => {
+  // Stream private file safely by relative storagePath (authenticated + branch-authorized + traversal-proof)
+  router.get('/api/v1/files/view', async (req, res) => {
+    const actor = resolveActor(req);
     const relPath = String(req.query.path || '');
     const resolved = resolveSafePrivateFilePath(relPath);
     if (!resolved) {
       return sendPgError(res, 404, 'FILE_NOT_FOUND', 'Requested file was not found');
     }
 
+    if (isPostgresConfigured()) {
+      const asset = await pgGetFileAssetByPath(relPath);
+      if (asset?.branch_id) {
+        const allowed = await canUserAccessBranch(actor, String(asset.branch_id));
+        if (!allowed) {
+          return sendPgError(res, 403, 'FORBIDDEN', 'Cross-branch private medical file access denied');
+        }
+      }
+    }
+
     const download = req.query.download === '1' || req.query.download === 'true';
     res.setHeader('Content-Type', resolved.mimeType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Cache-Control', 'private, no-store');
     if (download) {
       res.setHeader('Content-Disposition', `attachment; filename="${path.basename(resolved.absolutePath)}"`);
     } else {
@@ -345,19 +414,44 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
     return fs.createReadStream(resolved.absolutePath).pipe(res);
   });
 
-  // Stream private file by medical_attachments.id (verifies PostgreSQL record)
+  // Stream private file by medical_attachments.id (verifies PostgreSQL record & branch ownership)
   router.get('/api/v1/files/by-doc/:docId', async (req, res) => {
     if (!isPostgresConfigured()) {
       return sendPgError(res, 404, 'FILE_NOT_FOUND', 'Document file lookup requires PostgreSQL');
     }
 
     try {
-      const result = await pgQuery<{ storage_path: string | null; title: string }>(
-        'SELECT storage_path, title FROM medical_attachments WHERE id = $1 LIMIT 1',
+      const actor = resolveActor(req);
+      const result = await pgQuery<{
+        storage_path: string | null;
+        title: string;
+        branch_id: string | null;
+        is_confidential: boolean;
+      }>(
+        `
+        SELECT m.storage_path, m.title, p.branch_id, m.is_confidential
+        FROM medical_attachments m
+        JOIN patients p ON p.id = m.patient_id
+        WHERE m.id = $1
+        LIMIT 1
+        `,
         [req.params.docId]
       );
       if (result.rowCount === 0 || !result.rows[0].storage_path) {
         return sendPgError(res, 404, 'FILE_NOT_FOUND', 'Document file not found');
+      }
+
+      if (result.rows[0].branch_id) {
+        const allowed = await canUserAccessBranch(actor, result.rows[0].branch_id);
+        if (!allowed) {
+          return sendPgError(res, 403, 'FORBIDDEN', 'Cross-branch medical attachment access denied');
+        }
+      }
+      if (
+        result.rows[0].is_confidential &&
+        !['super_admin', 'admin_manager', 'doctor', 'therapist'].includes(actor.role)
+      ) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Confidential medical attachment requires clinical authorization');
       }
 
       const resolved = resolveSafePrivateFilePath(result.rows[0].storage_path);
@@ -369,7 +463,7 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
       const safeName = `${result.rows[0].title.replace(/[^a-zA-Z0-9._-]/g, '_')}${path.extname(resolved.absolutePath)}`;
       res.setHeader('Content-Type', resolved.mimeType);
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Cache-Control', 'private, no-store');
       res.setHeader('Content-Disposition', `${download ? 'attachment' : 'inline'}; filename="${safeName}"`);
 
       return fs.createReadStream(resolved.absolutePath).pipe(res);

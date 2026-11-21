@@ -122,7 +122,7 @@ appointmentsRouter.get(
         limit,
       } = req.query;
 
-      const targetBranch = (branchId as string) || (req.accessContext?.homeBranchId as string) || 'br-dhanmondi';
+      const targetBranch = (branchId as string) || (req.accessContext?.primaryBranchId as string) || 'br-dhanmondi';
 
       if (req.accessContext && !req.accessContext.canAccessBranch(targetBranch)) {
         throw new NotFoundError('Branch not accessible');

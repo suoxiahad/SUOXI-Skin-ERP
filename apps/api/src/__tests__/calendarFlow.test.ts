@@ -54,7 +54,7 @@ export async function runCalendarFlowTests(): Promise<void> {
       loginRes.headers.getSetCookie ? loginRes.headers.getSetCookie().join('; ') : loginRes.headers.get('set-cookie') || ''
     );
     const sessionCookie = loginCookies[SESSION_COOKIE_NAME];
-    csrfToken = (await loginRes.json()).data.csrfToken || csrfToken;
+    csrfToken = ((await loginRes.json()) as any).data.csrfToken || csrfToken;
     cookieHeader = `${SESSION_COOKIE_NAME}=${sessionCookie}; ${CSRF_COOKIE_NAME}=${encodeURIComponent(csrfToken)}`;
     console.log('  ✓ Superadmin authenticated with session and CSRF tokens');
 
@@ -71,7 +71,7 @@ export async function runCalendarFlowTests(): Promise<void> {
     if (largeRangeRes.status !== 400) {
       throw new Error(`Expected HTTP 400 for range > 42 days, got ${largeRangeRes.status}`);
     }
-    const largeRangeJson = await largeRangeRes.json();
+    const largeRangeJson = (await largeRangeRes.json()) as any;
     if (!largeRangeJson.error?.message?.includes('42 days')) {
       throw new Error(`Expected error message mentioning 42 days, got: ${largeRangeJson.error?.message}`);
     }
@@ -135,7 +135,7 @@ export async function runCalendarFlowTests(): Promise<void> {
         },
       }
     );
-    const listAptsJson = await listAptsRes.json();
+    const listAptsJson = (await listAptsRes.json()) as any;
     const listCount = listAptsJson.data.length;
 
     if (calApts.length !== listCount) {
@@ -178,7 +178,7 @@ export async function runCalendarFlowTests(): Promise<void> {
     }
 
     const ccCsrfRes = await fetch(`${baseUrl}/auth/csrf`);
-    const ccCsrfToken = (await ccCsrfRes.json()).data.csrfToken;
+    const ccCsrfToken = ((await ccCsrfRes.json()) as any).data.csrfToken;
     const ccCookiesA = parseCookies(
       ccCsrfRes.headers.getSetCookie ? ccCsrfRes.headers.getSetCookie().join('; ') : ccCsrfRes.headers.get('set-cookie') || ''
     );
@@ -199,7 +199,7 @@ export async function runCalendarFlowTests(): Promise<void> {
       ccLoginRes.headers.getSetCookie ? ccLoginRes.headers.getSetCookie().join('; ') : ccLoginRes.headers.get('set-cookie') || ''
     );
     const ccSessionCookie = ccLoginCookies[SESSION_COOKIE_NAME];
-    const ccCsrfTokenFinal = (await ccLoginRes.json()).data.csrfToken || ccCsrfToken;
+    const ccCsrfTokenFinal = ((await ccLoginRes.json()) as any).data.csrfToken || ccCsrfToken;
     const ccAuthCookie = `${SESSION_COOKIE_NAME}=${ccSessionCookie}; ${CSRF_COOKIE_NAME}=${encodeURIComponent(ccCsrfTokenFinal)}`;
 
     const ccCalRes = await fetch(
@@ -214,7 +214,7 @@ export async function runCalendarFlowTests(): Promise<void> {
     if (ccCalRes.status !== 200) {
       throw new Error(`Expected HTTP 200 for call-center calendar view, got ${ccCalRes.status}`);
     }
-    const ccCalJson = await ccCalRes.json();
+    const ccCalJson = (await ccCalRes.json()) as any;
     const ccApts = ccCalJson.data.appointments;
     for (const apt of ccApts) {
       if (apt.notes !== null && apt.notes !== undefined) {
@@ -272,7 +272,7 @@ export async function runCalendarFlowTests(): Promise<void> {
         appointment_type: 'consultation',
       }),
     });
-    const movingAptJson = await movingAptRes.json();
+    const movingAptJson = (await movingAptRes.json()) as any;
     const movingAptId = movingAptJson.data.id;
 
     // Simulate drag reschedule into occupied slot (15:00) -> Must return HTTP 409 Conflict
@@ -296,7 +296,7 @@ export async function runCalendarFlowTests(): Promise<void> {
     if (dragRescheduleRes.status !== 409) {
       throw new Error(`Expected HTTP 409 Conflict when dragging onto occupied slot, got ${dragRescheduleRes.status}`);
     }
-    const conflictJson = await dragRescheduleRes.json();
+    const conflictJson = (await dragRescheduleRes.json()) as any;
     if (!conflictJson.error?.message?.includes('already has an appointment')) {
       throw new Error(`Expected conflict message from server, got: ${conflictJson.error?.message}`);
     }

@@ -34,17 +34,17 @@ export const SMSGatewayView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'settings' | 'send' | 'templates' | 'automation' | 'logs'>('settings');
 
-  // Gateway Config state
+  // Gateway Config state (loaded from PostgreSQL via /api/v1/integration/sms/config)
   const [config, setConfig] = useState<SmsGatewayConfig>({
     provider: 'msg_mram',
     apiUrl: 'https://msg.mram.com.bd/smsapi',
-    apiKey: 'mram_live_sec_79a29e4bd0182c',
+    apiKey: '',
     senderId: 'SUOXI',
     defaultType: 'text',
     defaultLabel: 'transactional',
-    isActive: true,
-    balanceBDT: 3450.50,
-    balanceCredits: 9858,
+    isActive: false,
+    balanceBDT: 0,
+    balanceCredits: 0,
     lastCheckedAt: new Date().toISOString(),
     autoSendOnBooking: true,
     autoSendOnPayment: true,

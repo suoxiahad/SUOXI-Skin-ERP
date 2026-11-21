@@ -1,4 +1,4 @@
-import type { PoolConnection } from 'mysql2/promise';
+import type { PoolClient } from 'pg';
 
 export interface CodeSequenceRow {
   current_number: number;
@@ -21,20 +21,19 @@ const DEFAULT_CONFIGS: Record<string, SequenceConfig> = {
 };
 
 /**
- * Concurrency-safe, transactional, gap-free code generator.
+ * Concurrency-safe, transactional, gap-free code generator for PostgreSQL.
  * Uses SELECT ... FOR UPDATE inside caller's transaction to ensure strict serialization.
  */
 export async function nextCode(
-  conn: PoolConnection,
+  client: PoolClient,
   seqKey: string,
   periodKey = ''
 ): Promise<string> {
   const normalizedSeq = seqKey.toUpperCase();
   const defaultConfig = DEFAULT_CONFIGS[normalizedSeq] || { prefix: `${normalizedSeq}-`, padding: 5 };
 
-  // 1. Lock existing row or prepare insertion
-  const [rows] = await conn.query<any[]>(
-    'SELECT current_number, prefix, padding FROM code_sequences WHERE sequence_key = ? AND period_key = ? FOR UPDATE',
+  const res = await client.query<CodeSequenceRow>(
+    'SELECT current_number, prefix, padding FROM code_sequences WHERE sequence_key = $1 AND period_key = $2 FOR UPDATE',
     [normalizedSeq, periodKey]
   );
 
@@ -42,14 +41,14 @@ export async function nextCode(
   let prefix: string;
   let padding: number;
 
-  if (Array.isArray(rows) && rows.length > 0) {
-    const current = rows[0] as CodeSequenceRow;
+  if (res.rows.length > 0) {
+    const current = res.rows[0];
     nextNum = Number(current.current_number) + 1;
     prefix = current.prefix || defaultConfig.prefix;
     padding = current.padding || (defaultConfig.padding ?? 5);
 
-    await conn.query(
-      'UPDATE code_sequences SET current_number = ? WHERE sequence_key = ? AND period_key = ?',
+    await client.query(
+      'UPDATE code_sequences SET current_number = $1, updated_at = NOW() WHERE sequence_key = $2 AND period_key = $3',
       [nextNum, normalizedSeq, periodKey]
     );
   } else {
@@ -57,8 +56,8 @@ export async function nextCode(
     prefix = defaultConfig.prefix;
     padding = defaultConfig.padding ?? 5;
 
-    await conn.query(
-      'INSERT INTO code_sequences (sequence_key, period_key, prefix, current_number, padding) VALUES (?, ?, ?, ?, ?)',
+    await client.query(
+      'INSERT INTO code_sequences (sequence_key, period_key, prefix, current_number, padding) VALUES ($1, $2, $3, $4, $5)',
       [normalizedSeq, periodKey, prefix, nextNum, padding]
     );
   }

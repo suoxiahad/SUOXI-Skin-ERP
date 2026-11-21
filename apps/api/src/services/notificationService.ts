@@ -630,7 +630,11 @@ export class NotificationService {
 
     // 0. Webhook HMAC Signature Verification (if signature header provided)
     if (signatureHeader) {
-      const secret = process.env.SMS_WEBHOOK_SECRET || 'suoxi_webhook_signing_secret_dev';
+      const envSecret = (process.env.SMS_WEBHOOK_SECRET || '').trim();
+      if (!envSecret && process.env.NODE_ENV === 'production') {
+        throw new BadRequestError('SMS_WEBHOOK_SECRET is not configured in production');
+      }
+      const secret = envSecret || 'suoxi_webhook_signing_secret_dev';
       const rawPayload = typeof payload === 'string' ? payload : JSON.stringify(payload);
       const computedHex = crypto.createHmac('sha256', secret).update(rawPayload).digest('hex');
       const computedWithTs = timestampHeader

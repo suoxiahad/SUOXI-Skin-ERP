@@ -20,6 +20,7 @@ import type {
   User,
 } from '../../src/types/index.ts';
 import { pgQuery, withPgTransaction } from '../db/pgPool.ts';
+import { verifyHmacSignature } from '../config/securityConfig.ts';
 import {
   applyPackageFinancials,
   generateCode,
@@ -545,6 +546,34 @@ export const pgBillingPackageRepo = {
       const invoice = mapInvoiceRow(updatedInvRes.rows[0], allPays.rows.map(mapPaymentRow));
       const updatedPkg = applyPackageFinancials(rawPkg, newPaidAmount);
 
+      await client.query(
+        `
+        INSERT INTO payment_allocations (id, payment_id, invoice_id, allocated_amount_bdt)
+        VALUES ($1, $2, $3, $4)
+        `,
+        [`pal-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`, payment.id, invoiceId, payment.amountBDT]
+      );
+
+      await client.query(
+        `
+        INSERT INTO domain_outbox_events (id, event_type, aggregate_type, aggregate_id, dedupe_key, payload, status)
+        VALUES ($1, 'payment.recorded', 'payment', $2, $3, $4::jsonb, 'pending')
+        ON CONFLICT (dedupe_key) DO NOTHING
+        `,
+        [
+          `obx-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+          payment.id,
+          `payment.recorded:${payment.id}`,
+          JSON.stringify({
+            paymentId: payment.id,
+            invoiceId,
+            invoiceNumber: invoice.invoiceNumber,
+            patientId: rawPkg.patientId,
+            amountBDT: payment.amountBDT,
+          }),
+        ]
+      );
+
       await pgLogAuditEvent(
         actor,
         'PACKAGE_PAYMENT_RECORDED',
@@ -728,9 +757,9 @@ export const pgBillingPackageRepo = {
     data: {
       patientId: string;
       branchId: string;
-      items: Array<{ description: string; quantity: number; unitPriceBDT: number; discountBDT: number }>;
-      discountBDT: number;
-      vatPercent: number;
+      items: Array<{ description: string; quantity: number; unitPriceBDT: number; discountBDT?: number }>;
+      discountBDT?: number;
+      vatPercent?: number;
     },
     actor: User,
     ipAddress: string
@@ -748,22 +777,28 @@ export const pgBillingPackageRepo = {
       const brRes = await client.query('SELECT id, name FROM branches WHERE id = $1', [data.branchId]);
       const branch = brRes.rows[0] || { id: 'br-dhanmondi', name: 'Dhanmondi Main Center' };
 
+      const vatPercent = Math.max(0, Number(data.vatPercent ?? 0));
+      const discountBDT = Math.max(0, Number(data.discountBDT ?? 0));
+
       let subtotal = 0;
       const computedItems = data.items.map((it, idx) => {
-        const itemTotal = it.quantity * it.unitPriceBDT - it.discountBDT;
-        subtotal += itemTotal;
+        const qty = Math.max(0.01, Number(it.quantity || 1));
+        const unitPrice = Math.max(0, Number(it.unitPriceBDT || 0));
+        const lineDiscount = Math.min(qty * unitPrice, Math.max(0, Number(it.discountBDT ?? 0)));
+        const itemTotal = Number((qty * unitPrice - lineDiscount).toFixed(2));
+        subtotal = Number((subtotal + itemTotal).toFixed(2));
         return {
-          id: `it-${Date.now()}-${idx}`,
+          id: `it-${Date.now()}-${idx}-${crypto.randomBytes(2).toString('hex')}`,
           description: it.description,
-          quantity: it.quantity,
-          unitPriceBDT: it.unitPriceBDT,
-          discountBDT: it.discountBDT,
+          quantity: qty,
+          unitPriceBDT: unitPrice,
+          discountBDT: lineDiscount,
           totalBDT: itemTotal,
         };
       });
 
-      const vatAmount = (subtotal * data.vatPercent) / 100;
-      const totalAmount = Math.max(0, subtotal + vatAmount - data.discountBDT);
+      const vatAmount = Number(((subtotal * vatPercent) / 100).toFixed(2));
+      const totalAmount = Number(Math.max(0, subtotal + vatAmount - discountBDT).toFixed(2));
       const id = `inv-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
       const invoiceNumber = generateCode('INV');
 
@@ -796,13 +831,25 @@ export const pgBillingPackageRepo = {
           branch.name,
           JSON.stringify(computedItems),
           subtotal,
-          data.vatPercent,
+          vatPercent,
           vatAmount,
-          data.discountBDT,
+          discountBDT,
           totalAmount,
           actor.name,
         ]
       );
+
+      for (const line of computedItems) {
+        await client.query(
+          `
+          INSERT INTO invoice_items (
+            id, invoice_id, item_type, description, quantity, unit_price_bdt, discount_bdt, line_total_bdt
+          )
+          VALUES ($1, $2, 'service', $3, $4, $5, $6, $7)
+          `,
+          [line.id, id, line.description, line.quantity, line.unitPriceBDT, line.discountBDT, line.totalBDT]
+        );
+      }
 
       const invoice = mapInvoiceRow(res.rows[0], []);
       await pgLogAuditEvent(
@@ -906,6 +953,34 @@ export const pgBillingPackageRepo = {
         [invoiceId]
       );
       const invoice = mapInvoiceRow(updInvRes.rows[0], allPays.rows.map(mapPaymentRow));
+
+      await client.query(
+        `
+        INSERT INTO payment_allocations (id, payment_id, invoice_id, allocated_amount_bdt)
+        VALUES ($1, $2, $3, $4)
+        `,
+        [`pal-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`, payment.id, invoiceId, payment.amountBDT]
+      );
+
+      await client.query(
+        `
+        INSERT INTO domain_outbox_events (id, event_type, aggregate_type, aggregate_id, dedupe_key, payload, status)
+        VALUES ($1, 'payment.recorded', 'payment', $2, $3, $4::jsonb, 'pending')
+        ON CONFLICT (dedupe_key) DO NOTHING
+        `,
+        [
+          `obx-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+          payment.id,
+          `payment.recorded:${payment.id}`,
+          JSON.stringify({
+            paymentId: payment.id,
+            invoiceId,
+            invoiceNumber: invoice.invoiceNumber,
+            patientId: invoice.patientId,
+            amountBDT: payment.amountBDT,
+          }),
+        ]
+      );
 
       await pgLogAuditEvent(
         actor,
@@ -1092,6 +1167,357 @@ export const pgBillingPackageRepo = {
         status: (r.status as DailyClosingReport['status']) || 'submitted',
         createdAt: toIsoString(r.created_at),
       };
+    });
+  },
+
+  // ---------------------------------------------------------------------------
+  // Refunds (Strict Refund Cap <= Valid Paid Amount, Immutable Ledger)
+  // ---------------------------------------------------------------------------
+  async listRefunds(invoiceId?: string) {
+    const res = invoiceId
+      ? await pgQuery('SELECT * FROM payment_refunds WHERE invoice_id = $1 ORDER BY created_at DESC', [invoiceId])
+      : await pgQuery('SELECT * FROM payment_refunds ORDER BY created_at DESC LIMIT 200');
+    return res.rows.map((r) => ({
+      id: String(r.id),
+      refundNumber: String(r.refund_number),
+      invoiceId: String(r.invoice_id),
+      paymentId: String(r.payment_id),
+      amountBDT: toNumber(r.amount_bdt),
+      currency: String(r.currency || 'BDT'),
+      method: String(r.method || 'cash'),
+      transactionRef: r.transaction_ref ? String(r.transaction_ref) : undefined,
+      reason: String(r.reason),
+      status: String(r.status),
+      requestedBy: String(r.requested_by),
+      approvedBy: r.approved_by ? String(r.approved_by) : undefined,
+      paidAt: r.paid_at ? toIsoString(r.paid_at) : undefined,
+      createdAt: toIsoString(r.created_at),
+    }));
+  },
+
+  async createRefund(
+    input: {
+      invoiceId: string;
+      paymentId: string;
+      amountBDT: number;
+      method?: string;
+      transactionRef?: string;
+      reason: string;
+    },
+    actor: User,
+    ipAddress: string
+  ) {
+    if (!Number.isFinite(input.amountBDT) || input.amountBDT <= 0) {
+      const err = new Error('Refund amount must be positive') as Error & { statusCode?: number; code?: string };
+      err.statusCode = 400;
+      err.code = 'VALIDATION_ERROR';
+      throw err;
+    }
+
+    return withPgTransaction(async (client) => {
+      const invRes = await client.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [input.invoiceId]);
+      if (invRes.rows.length === 0) {
+        const err = new Error('Invoice not found') as Error & { statusCode?: number; code?: string };
+        err.statusCode = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+      const inv = invRes.rows[0];
+      if (inv.status === 'void') {
+        const err = new Error('Cannot refund a voided invoice') as Error & { statusCode?: number; code?: string };
+        err.statusCode = 409;
+        err.code = 'INVOICE_VOIDED';
+        throw err;
+      }
+
+      const payRes = await client.query(
+        'SELECT * FROM payment_records WHERE id = $1 AND invoice_id = $2 FOR UPDATE',
+        [input.paymentId, input.invoiceId]
+      );
+      if (payRes.rows.length === 0 || payRes.rows[0].status !== 'valid') {
+        const err = new Error('Valid payment record not found for this invoice') as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        err.statusCode = 404;
+        err.code = 'PAYMENT_NOT_FOUND';
+        throw err;
+      }
+
+      const paymentAmount = toNumber(payRes.rows[0].amount_bdt, 0);
+      const refSumRes = await client.query<{ refunded: string }>(
+        `
+        SELECT COALESCE(SUM(amount_bdt), 0)::text AS refunded
+        FROM payment_refunds
+        WHERE payment_id = $1 AND status IN ('approved', 'completed')
+        `,
+        [input.paymentId]
+      );
+      const alreadyRefunded = toNumber(refSumRes.rows[0]?.refunded, 0);
+
+      if (alreadyRefunded + input.amountBDT > paymentAmount + 0.01) {
+        const err = new Error(
+          `Refund ৳ ${input.amountBDT} exceeds refundable balance ৳ ${(paymentAmount - alreadyRefunded).toFixed(2)}`
+        ) as Error & { statusCode?: number; code?: string };
+        err.statusCode = 422;
+        err.code = 'REFUND_EXCEEDS_PAID';
+        throw err;
+      }
+
+      const refundId = `refd-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const refundNumber = generateCode('REF');
+      const ins = await client.query(
+        `
+        INSERT INTO payment_refunds (
+          id, refund_number, invoice_id, payment_id, amount_bdt, currency,
+          method, transaction_ref, reason, status, requested_by, approved_by, approved_at, paid_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 'BDT', $6, $7, $8, 'completed', $9, $9, NOW(), NOW())
+        RETURNING *
+        `,
+        [
+          refundId,
+          refundNumber,
+          input.invoiceId,
+          input.paymentId,
+          input.amountBDT,
+          input.method || payRes.rows[0].method || 'cash',
+          input.transactionRef || null,
+          input.reason,
+          actor.id,
+        ]
+      );
+
+      // Recompute net invoice paid vs refunds without mutating historical payment_records
+      const totalPaid = await getValidPaidForInvoice(input.invoiceId, client);
+      const totalInvRefundRes = await client.query<{ refunded: string }>(
+        `SELECT COALESCE(SUM(amount_bdt), 0)::text AS refunded FROM payment_refunds WHERE invoice_id = $1 AND status IN ('approved', 'completed')`,
+        [input.invoiceId]
+      );
+      const totalRefunded = toNumber(totalInvRefundRes.rows[0]?.refunded, 0);
+      const netPaid = Math.max(0, Number((totalPaid - totalRefunded).toFixed(2)));
+      const totalAmount = toNumber(inv.total_amount_bdt, 0);
+      const nextStatus =
+        netPaid <= 0.01 && totalRefunded > 0
+          ? 'refunded'
+          : totalAmount - netPaid <= 0.01
+          ? 'paid'
+          : 'partially_paid';
+
+      await client.query(
+        `
+        UPDATE invoices
+        SET paid_amount_bdt = $2,
+            due_amount_bdt = GREATEST(0, total_amount_bdt - $2),
+            status = $3,
+            updated_at = NOW()
+        WHERE id = $1
+        `,
+        [input.invoiceId, netPaid, nextStatus]
+      );
+
+      await client.query(
+        `
+        INSERT INTO domain_outbox_events (id, event_type, aggregate_type, aggregate_id, dedupe_key, payload, status)
+        VALUES ($1, 'payment.refunded', 'refund', $2, $3, $4::jsonb, 'pending')
+        ON CONFLICT (dedupe_key) DO NOTHING
+        `,
+        [
+          `obx-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+          refundId,
+          `payment.refunded:${refundId}`,
+          JSON.stringify({
+            refundId,
+            paymentId: input.paymentId,
+            invoiceId: input.invoiceId,
+            invoiceNumber: String(inv.invoice_number),
+            patientId: String(inv.patient_id),
+            amountBDT: input.amountBDT,
+          }),
+        ]
+      );
+
+      await pgLogAuditEvent(
+        actor,
+        'PAYMENT_REFUNDED',
+        'invoice',
+        input.invoiceId,
+        `Issued refund ${refundNumber} of ৳ ${input.amountBDT.toFixed(2)} against payment ${input.paymentId}. Reason: ${input.reason}`,
+        ipAddress,
+        client
+      );
+
+      return ins.rows[0];
+    });
+  },
+
+  // ---------------------------------------------------------------------------
+  // Idempotent Payment Gateway Webhook Processor (Signature + Terminal-State Guard)
+  // ---------------------------------------------------------------------------
+  async processPaymentWebhook(params: {
+    provider: string;
+    providerEventId: string;
+    invoiceId: string;
+    amountBDT: number;
+    currency: string;
+    eventStatus: string;
+    rawPayload: string;
+    signatureHeader?: string;
+    webhookSecret?: string;
+    payload: Record<string, unknown>;
+  }): Promise<{ deduplicated: boolean; ignored?: boolean; reason?: string; paymentId?: string }> {
+    if (params.webhookSecret) {
+      const validSig = verifyHmacSignature(params.rawPayload, params.signatureHeader, params.webhookSecret);
+      if (!validSig) {
+        const err = new Error('Invalid payment webhook HMAC signature') as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        err.statusCode = 401;
+        err.code = 'INVALID_WEBHOOK_SIGNATURE';
+        throw err;
+      }
+    }
+
+    if (params.currency.toUpperCase() !== 'BDT') {
+      const err = new Error(`Unsupported payment currency '${params.currency}'; expected BDT`) as Error & {
+        statusCode?: number;
+        code?: string;
+      };
+      err.statusCode = 422;
+      err.code = 'CURRENCY_MISMATCH';
+      throw err;
+    }
+
+    if (!Number.isFinite(params.amountBDT) || params.amountBDT <= 0) {
+      const err = new Error('Invalid payment webhook amount') as Error & { statusCode?: number; code?: string };
+      err.statusCode = 400;
+      err.code = 'INVALID_AMOUNT';
+      throw err;
+    }
+
+    return withPgTransaction(async (client) => {
+      // 1. Atomic idempotency check via UNIQUE(provider, provider_event_id)
+      const whId = `pwh-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const whIns = await client.query(
+        `
+        INSERT INTO payment_webhook_events (
+          id, provider, provider_event_id, invoice_id, amount_bdt, currency, event_status, payload
+        )
+        VALUES ($1, $2, $3, $4, $5, 'BDT', $6, $7::jsonb)
+        ON CONFLICT (provider, provider_event_id) DO NOTHING
+        RETURNING id
+        `,
+        [
+          whId,
+          params.provider,
+          params.providerEventId,
+          params.invoiceId,
+          params.amountBDT,
+          params.eventStatus,
+          JSON.stringify(params.payload),
+        ]
+      );
+
+      if ((whIns.rowCount || 0) === 0) {
+        return { deduplicated: true, reason: 'Duplicate payment webhook event already processed' };
+      }
+
+      // 2. Lock invoice and guard against terminal states (void / refunded / cancelled)
+      const invRes = await client.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [params.invoiceId]);
+      if (invRes.rows.length === 0) {
+        const err = new Error('Invoice referenced by payment webhook not found') as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        err.statusCode = 404;
+        err.code = 'INVOICE_NOT_FOUND';
+        throw err;
+      }
+
+      const inv = invRes.rows[0];
+      if (['void', 'refunded', 'cancelled'].includes(String(inv.status))) {
+        return {
+          deduplicated: false,
+          ignored: true,
+          reason: `Late webhook ignored: invoice is already in terminal state '${inv.status}'`,
+        };
+      }
+
+      if (params.eventStatus.toLowerCase() !== 'succeeded' && params.eventStatus.toLowerCase() !== 'paid') {
+        return { deduplicated: false, ignored: true, reason: `Non-settlement status '${params.eventStatus}' logged` };
+      }
+
+      const totalAmount = toNumber(inv.total_amount_bdt, 0);
+      const currentPaid = await getValidPaidForInvoice(params.invoiceId, client);
+      const currentDue = Math.max(0, totalAmount - currentPaid);
+      if (params.amountBDT > currentDue + 0.01) {
+        const err = new Error(
+          `Webhook payment ৳ ${params.amountBDT} exceeds remaining due ৳ ${currentDue.toFixed(2)}`
+        ) as Error & { statusCode?: number; code?: string };
+        err.statusCode = 422;
+        err.code = 'AMOUNT_EXCEEDS_DUE';
+        throw err;
+      }
+
+      const payId = `pay-wh-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+      await client.query(
+        `
+        INSERT INTO payment_records (
+          id, invoice_id, receipt_number, amount_bdt, currency, method,
+          transaction_ref, provider_name, provider_reference, paid_at, received_by, status
+        )
+        VALUES ($1, $2, $3, $4, 'BDT', $5, $6, $7, $8, NOW(), 'payment_gateway', 'valid')
+        `,
+        [
+          payId,
+          params.invoiceId,
+          generateCode('RCP'),
+          params.amountBDT,
+          params.provider.toLowerCase().includes('bkash') ? 'bkash' : 'card',
+          params.providerEventId,
+          params.provider,
+          params.providerEventId,
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO payment_allocations (id, payment_id, invoice_id, allocated_amount_bdt) VALUES ($1, $2, $3, $4)`,
+        [`pal-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`, payId, params.invoiceId, params.amountBDT]
+      );
+
+      await client.query('UPDATE payment_webhook_events SET payment_id = $2 WHERE id = $1', [whId, payId]);
+
+      const newPaid = await getValidPaidForInvoice(params.invoiceId, client);
+      const newDue = Math.max(0, totalAmount - newPaid);
+      const nextStatus = newDue <= 0.01 ? 'paid' : 'partially_paid';
+
+      await client.query(
+        'UPDATE invoices SET paid_amount_bdt = $2, due_amount_bdt = $3, status = $4, updated_at = NOW() WHERE id = $1',
+        [params.invoiceId, newPaid, newDue, nextStatus]
+      );
+
+      await client.query(
+        `
+        INSERT INTO domain_outbox_events (id, event_type, aggregate_type, aggregate_id, dedupe_key, payload, status)
+        VALUES ($1, 'payment.recorded', 'payment', $2, $3, $4::jsonb, 'pending')
+        ON CONFLICT (dedupe_key) DO NOTHING
+        `,
+        [
+          `obx-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+          payId,
+          `payment.recorded:${payId}`,
+          JSON.stringify({
+            paymentId: payId,
+            invoiceId: params.invoiceId,
+            invoiceNumber: String(inv.invoice_number),
+            patientId: String(inv.patient_id),
+            amountBDT: params.amountBDT,
+          }),
+        ]
+      );
+
+      return { deduplicated: false, paymentId: payId };
     });
   },
 };

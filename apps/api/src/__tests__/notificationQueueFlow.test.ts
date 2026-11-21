@@ -14,6 +14,7 @@ export async function runNotificationQueueFlowTests() {
   const testActor = {
     id: 'usr-admin-01',
     fullName: 'Test Administrator',
+    role: 'super_admin',
     roles: ['super_admin'],
     branchId: 'br-dhk-01',
   };
@@ -92,10 +93,9 @@ export async function runNotificationQueueFlowTests() {
       appointment_date: tomorrowStr,
       start_time: '11:00',
       duration_minutes: 30,
-      appointment_type: 'procedure',
+      appointment_type: 'treatment_session',
     },
-    testActor,
-    '127.0.0.1'
+    testActor
   );
 
   const aptNoConsent = await appointmentService.createAppointment(
@@ -110,8 +110,7 @@ export async function runNotificationQueueFlowTests() {
       duration_minutes: 30,
       appointment_type: 'consultation',
     },
-    testActor,
-    '127.0.0.1'
+    testActor
   );
 
   const aptCancelled = await appointmentService.createAppointment(
@@ -124,10 +123,9 @@ export async function runNotificationQueueFlowTests() {
       appointment_date: tomorrowStr,
       start_time: '14:00',
       duration_minutes: 30,
-      appointment_type: 'procedure',
+      appointment_type: 'treatment_session',
     },
-    testActor,
-    '127.0.0.1'
+    testActor
   );
   await appointmentService.cancelAppointment(
     aptCancelled.id,

@@ -81,7 +81,11 @@ export class ReferralService {
   // CRYPTOGRAPHY ENGINE (AES-256-GCM) — Hard Rule 10
   // ============================================================================
   private getMasterKey(): Buffer {
-    const keyHex = process.env.APP_MASTER_KEY || DEFAULT_DEV_MASTER_KEY;
+    const envKey = (process.env.APP_MASTER_KEY || '').trim();
+    if (!envKey && process.env.NODE_ENV === 'production') {
+      throw new Error('APP_MASTER_KEY is required in production');
+    }
+    const keyHex = envKey || DEFAULT_DEV_MASTER_KEY;
     try {
       const buf = Buffer.from(keyHex, 'hex');
       if (buf.length === 32) return buf;

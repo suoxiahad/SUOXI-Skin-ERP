@@ -22,8 +22,30 @@ import type {
   UserRole,
 } from '../../src/types/index.ts';
 import { revokeAllRedisSessionsExcept, revokeRedisSession } from '../auth/productionAuth.ts';
+import { decryptSecret, encryptSecret, maskSecret } from '../config/securityConfig.ts';
 import { pgQuery, withPgTransaction } from '../db/pgPool.ts';
 import { pgLogAuditEvent, toIsoString, toNumber } from './pgHelpers.ts';
+
+function encryptFieldValue(raw: string): string {
+  if (!raw) return '';
+  if (raw.startsWith('enc:v1:')) return raw;
+  return `enc:v1:${encryptSecret(raw)}`;
+}
+
+function decryptFieldValue(stored: string): string {
+  if (!stored) return '';
+  if (!stored.startsWith('enc:v1:')) return stored;
+  try {
+    return decryptSecret(stored.slice('enc:v1:'.length));
+  } catch {
+    return '';
+  }
+}
+
+function isMaskedPlaceholder(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return value.includes('••••') || value.includes('****');
+}
 
 // =============================================================================
 // Default Clinic Settings & Gateway Fallbacks (Dhaka, Bangladesh)
@@ -360,8 +382,13 @@ export const pgOpsSettingsRepo = {
   // ===========================================================================
   // SMS GATEWAY (msg.mram.com.bd + PostgreSQL Persistence)
   // ===========================================================================
-  async getSmsConfig(): Promise<SmsGatewayConfig> {
-    return getSettingValue('sms_gateway', DEFAULT_SMS_CONFIG);
+  async getSmsConfig(options?: { revealSecrets?: boolean }): Promise<SmsGatewayConfig> {
+    const raw = await getSettingValue('sms_gateway', DEFAULT_SMS_CONFIG);
+    const decrypted = decryptFieldValue(raw.apiKey || '');
+    return {
+      ...raw,
+      apiKey: options?.revealSecrets ? decrypted : maskSecret(decrypted),
+    };
   },
 
   async updateSmsConfig(
@@ -369,10 +396,20 @@ export const pgOpsSettingsRepo = {
     actor: User,
     ipAddress: string
   ): Promise<SmsGatewayConfig> {
+    const existingRaw = await getSettingValue('sms_gateway', DEFAULT_SMS_CONFIG);
+    const nextPatch: Partial<SmsGatewayConfig> = {
+      ...patch,
+      lastCheckedAt: new Date().toISOString(),
+    };
+    if (patch.apiKey === undefined || patch.apiKey === '' || isMaskedPlaceholder(patch.apiKey)) {
+      nextPatch.apiKey = existingRaw.apiKey;
+    } else {
+      nextPatch.apiKey = encryptFieldValue(patch.apiKey.trim());
+    }
     const saved = await upsertSettingValue(
       'sms_gateway',
       DEFAULT_SMS_CONFIG,
-      { ...patch, lastCheckedAt: new Date().toISOString() },
+      nextPatch,
       actor
     );
     await pgLogAuditEvent(
@@ -383,13 +420,14 @@ export const pgOpsSettingsRepo = {
       `Updated SMS Gateway configuration (Sender ID: ${saved.senderId})`,
       ipAddress
     );
-    return saved;
+    const decrypted = decryptFieldValue(saved.apiKey || '');
+    return { ...saved, apiKey: maskSecret(decrypted) };
   },
 
   async checkSmsBalance(actor: User) {
-    let cfg = await this.getSmsConfig();
+    let cfg = await this.getSmsConfig({ revealSecrets: true });
     try {
-      if (cfg.apiKey && !cfg.apiKey.startsWith('mram_live_sec_')) {
+      if (cfg.apiKey) {
         const response = await fetch(
           `https://msg.mram.com.bd/miscapi/${encodeURIComponent(cfg.apiKey)}/getBalance`
         );
@@ -439,7 +477,7 @@ export const pgOpsSettingsRepo = {
     ipAddress: string,
     serverIp: string
   ) {
-    const cfg = await this.getSmsConfig();
+    const cfg = await this.getSmsConfig({ revealSecrets: true });
     const messageType = input.messageType || cfg.defaultType || 'text';
     const label = input.label || cfg.defaultLabel || 'transactional';
     const senderId = (input.senderId || cfg.senderId || 'SUOXI').trim();
@@ -459,7 +497,7 @@ export const pgOpsSettingsRepo = {
     const normalizedPhone = cleanPhone.startsWith('+') ? cleanPhone : `+88${cleanPhone.replace(/^88/, '')}`;
     const { charsCount, smsCount, costBDT } = calculateSmsDetails(input.messageContent, messageType);
 
-    const hasRealKey = Boolean(cfg.apiKey && !cfg.apiKey.startsWith('mram_live_sec_'));
+    const hasRealKey = Boolean(cfg.apiKey && cfg.apiKey.trim().length > 0);
     if (hasRealKey && cfg.balanceCredits > 0 && cfg.balanceCredits < smsCount) {
       const err = new Error(
         'Balance Insufficient (Code 1007: Please recharge your msg.mram.com.bd account)'
@@ -664,8 +702,13 @@ export const pgOpsSettingsRepo = {
   // ===========================================================================
   // EMAIL GATEWAY (cPanel SMTP + PostgreSQL Persistence)
   // ===========================================================================
-  async getEmailConfig(): Promise<EmailGatewayConfig> {
-    return getSettingValue('email_gateway', DEFAULT_EMAIL_CONFIG);
+  async getEmailConfig(options?: { revealSecrets?: boolean }): Promise<EmailGatewayConfig> {
+    const raw = await getSettingValue('email_gateway', DEFAULT_EMAIL_CONFIG);
+    const decrypted = decryptFieldValue(raw.smtpPass || '');
+    return {
+      ...raw,
+      smtpPass: options?.revealSecrets ? decrypted : maskSecret(decrypted),
+    };
   },
 
   async updateEmailConfig(
@@ -673,7 +716,14 @@ export const pgOpsSettingsRepo = {
     actor: User,
     ipAddress: string
   ): Promise<EmailGatewayConfig> {
-    const saved = await upsertSettingValue('email_gateway', DEFAULT_EMAIL_CONFIG, patch, actor);
+    const existingRaw = await getSettingValue('email_gateway', DEFAULT_EMAIL_CONFIG);
+    const nextPatch: Partial<EmailGatewayConfig> = { ...patch };
+    if (patch.smtpPass === undefined || patch.smtpPass === '' || isMaskedPlaceholder(patch.smtpPass)) {
+      nextPatch.smtpPass = existingRaw.smtpPass;
+    } else {
+      nextPatch.smtpPass = encryptFieldValue(patch.smtpPass);
+    }
+    const saved = await upsertSettingValue('email_gateway', DEFAULT_EMAIL_CONFIG, nextPatch, actor);
     await pgLogAuditEvent(
       actor,
       'INTEGRATION_EMAIL_UPDATED',
@@ -682,7 +732,8 @@ export const pgOpsSettingsRepo = {
       `Updated cPanel SMTP Configuration (Host: ${saved.smtpHost}, User: ${saved.smtpUser})`,
       ipAddress
     );
-    return saved;
+    const decrypted = decryptFieldValue(saved.smtpPass || '');
+    return { ...saved, smtpPass: maskSecret(decrypted) };
   },
 
   async sendTestEmail(
@@ -690,7 +741,7 @@ export const pgOpsSettingsRepo = {
     actor: User,
     ipAddress: string
   ) {
-    const cfg = await this.getEmailConfig();
+    const cfg = await this.getEmailConfig({ revealSecrets: true });
     const subject = input.subject || 'Test Verification Email from SUOXI Clinic';
 
     const diagnosticSteps = [
@@ -826,8 +877,8 @@ export const pgOpsSettingsRepo = {
     actor: User,
     ipAddress: string
   ): Promise<BackupRecord> {
+    const counts = await this.getDatabaseTableCounts();
     return withPgTransaction(async (client) => {
-      const counts = await this.getDatabaseTableCounts();
       const totalRecords =
         counts.branches +
         counts.users +

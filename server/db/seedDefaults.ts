@@ -157,12 +157,20 @@ const DEFAULT_MASTER_PACKAGES = [
 ];
 
 async function run(): Promise<void> {
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      '[SUOXI Seed] REFUSED: seedDefaults.ts is strictly for development/testing.\n' +
+        'In production, run `npm run pg:migrate` followed by `npm run pg:create-admin` with strong credentials.'
+    );
+    process.exit(1);
+  }
+
   if (!isPostgresConfigured()) {
     console.error('[SUOXI Seed] DATABASE_URL (postgresql://...) is not set.');
     process.exit(1);
   }
 
-  const initialAdminPassword = process.env.SEED_ADMIN_PASSWORD || 'SuoxiAdmin@2026!';
+  const initialAdminPassword = process.env.SEED_ADMIN_PASSWORD || 'SuoxiDevOnly@2026!';
   const adminHash = await argon2.hash(initialAdminPassword);
 
   await withPgTransaction(async (client) => {

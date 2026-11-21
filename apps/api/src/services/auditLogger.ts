@@ -1,4 +1,4 @@
-import type { PoolConnection } from 'mysql2/promise';
+import type { PoolClient } from 'pg';
 
 export interface AuditParams {
   actorUserId: string | number;
@@ -86,10 +86,10 @@ export function getAuditStore(): AuditStore {
 
 /**
  * Transactional audit logger that sanitizes payloads by stripping secrets
- * before writing to audit_events.
+ * before writing to audit_events (PostgreSQL).
  */
 export async function logAudit(
-  conn: PoolConnection | null,
+  conn: PoolClient | null,
   params: AuditParams
 ): Promise<void> {
   const sanitizedBefore = params.payloadBefore ? JSON.stringify(stripSecrets(params.payloadBefore)) : null;
@@ -100,7 +100,7 @@ export async function logAudit(
       `INSERT INTO audit_events (
         actor_user_id, action, entity_type, entity_id, patient_id, branch_id,
         reason, payload_before, payload_after, ip_address, user_agent
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)`,
       [
         params.actorUserId,
         params.action,

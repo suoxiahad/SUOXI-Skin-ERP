@@ -71,7 +71,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
     if (listRes.status !== 200) {
       throw new Error(`GET /appointments failed: ${listRes.status}`);
     }
-    const listJson = await listRes.json();
+    const listJson = (await listRes.json()) as any;
     if (!Array.isArray(listJson.data)) {
       throw new Error('GET /appointments did not return data array');
     }
@@ -88,7 +88,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
     if (availRes.status !== 200) {
       throw new Error(`GET /appointments/availability failed: ${availRes.status}`);
     }
-    const availJson = await availRes.json();
+    const availJson = (await availRes.json()) as any;
     const busySlot = availJson.data.slots.find((s: any) => s.start_time === '16:30');
     if (!busySlot || busySlot.is_available) {
       throw new Error('Expected slot 16:30 to be marked unavailable due to APT-000412');
@@ -153,7 +153,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
     }
 
     const winningRes = postARes.status === 201 ? postARes : postBRes;
-    const winningJson = await winningRes.json();
+    const winningJson = (await winningRes.json()) as any;
     const winningId = winningJson.data.id;
     console.log(`  ✓ Concurrency lock verified: exactly one 201 Created and one 409 Conflict (${winningJson.data.appointment_code})`);
 
@@ -188,7 +188,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
     if (visitRes.status !== 200) {
       throw new Error(`Failed to check-in appointment: ${visitRes.status}`);
     }
-    const visitedJson = await visitRes.json();
+    const visitedJson = (await visitRes.json()) as any;
     if (!visitedJson.data.checked_in_at) {
       throw new Error('checked_in_at timestamp was not recorded on visited status');
     }
@@ -233,7 +233,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
         appointment_type: 'follow_up',
       }),
     });
-    const aptToRescheduleJson = await aptToRescheduleRes.json();
+    const aptToRescheduleJson = (await aptToRescheduleRes.json()) as any;
     const oldAptId = aptToRescheduleJson.data.id;
 
     // Reschedule to a new slot
@@ -255,7 +255,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
     if (rescheduleRes.status !== 200) {
       throw new Error(`Reschedule failed: ${rescheduleRes.status}`);
     }
-    const rescheduleJson = await rescheduleRes.json();
+    const rescheduleJson = (await rescheduleRes.json()) as any;
     const { oldAppointment, newAppointment } = rescheduleJson.data;
 
     if (oldAppointment.status !== 'rescheduled' || oldAppointment.rescheduled_to_appointment_id !== newAppointment.id) {
@@ -300,7 +300,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
         set_by_clinician: true,
       }),
     });
-    const docAptJson = await docAptRes.json();
+    const docAptJson = (await docAptRes.json()) as any;
     const docAptId = docAptJson.data.id;
 
     // Create a call center agent user in userRegistry
@@ -342,7 +342,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
 
     // Login as call center agent
     const ccCsrfRes = await fetch(`${baseUrl}/auth/csrf`);
-    const ccCsrfJson = await ccCsrfRes.json();
+    const ccCsrfJson = (await ccCsrfRes.json()) as any;
     const ccCsrfToken = ccCsrfJson.data.csrfToken;
     const ccCookiesA = parseCookies(
       ccCsrfRes.headers.getSetCookie ? ccCsrfRes.headers.getSetCookie().join('; ') : ccCsrfRes.headers.get('set-cookie') || ''
@@ -419,7 +419,7 @@ export async function runAppointmentFlowTests(): Promise<void> {
     if (timelineRes.status !== 200) {
       throw new Error(`GET /patients/pat-1/timeline failed: ${timelineRes.status}`);
     }
-    const timelineJson = await timelineRes.json();
+    const timelineJson = (await timelineRes.json()) as any;
     const aptTimelineItems = timelineJson.data.filter((item: any) => item.refType === 'appointments');
     if (aptTimelineItems.length === 0) {
       throw new Error('v_patient_timeline did not contain appointment events for pat-1');
