@@ -2,17 +2,11 @@ import React, { useState, useEffect } from 'react';
 import {
   Search,
   Building2,
-  Globe,
-  Bell,
-  UserCheck,
   ChevronDown,
   Clock,
-  Sparkles,
-  ShieldAlert,
   LogOut,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
-import type { UserRole } from '../../types/index.ts';
 
 export const Topbar: React.FC = () => {
   const {
@@ -22,15 +16,11 @@ export const Topbar: React.FC = () => {
     setActiveBranchId,
     language,
     setLanguage,
-    switchRole,
-    allowRoleSwitcher,
     logout,
     setIsSearchOpen,
-    setIsQuickBookOpen,
   } = useApp();
 
   const [dhakaTime, setDhakaTime] = useState('');
-  const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
   const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
 
   // Live Asia/Dhaka Wall-clock Time (Hard Rule & Locale)
@@ -56,17 +46,6 @@ export const Topbar: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const rolesList: { role: UserRole; title: string; subtitle: string }[] = [
-    { role: 'doctor', title: 'Doctor / Consultant', subtitle: 'Dr. Nusrat Jahan (BMDC-A-48921)' },
-    { role: 'receptionist', title: 'Receptionist', subtitle: 'Fatima Zohra (Fast Booking <60s)' },
-    { role: 'call_center', title: 'Call Center Agent', subtitle: "Tania Khan (Tomorrow's Calls)" },
-    { role: 'cashier', title: 'Accounts & Cashier', subtitle: 'Shamim Hossain (Derived Dues & Billing)' },
-    { role: 'therapist', title: 'Therapist / Aesthetician', subtitle: 'Rina Begum (Session Deductions)' },
-    { role: 'inventory_manager', title: 'Inventory Manager', subtitle: 'Sharmin Sultana (Stock Adjustments)' },
-    { role: 'super_admin', title: 'Super Admin', subtitle: 'Full Privileged Access & Audits' },
-    { role: 'patient', title: 'Patient (Mobile Portal)', subtitle: 'Taslima Akter (Upcoming Rx & Diet)' },
-  ];
-
   const currentBranch = branches.find((b) => b.id === activeBranchId) || branches[0];
 
   return (
@@ -75,7 +54,7 @@ export const Topbar: React.FC = () => {
       <div className="flex items-center gap-3 flex-1 max-w-md">
         <button
           onClick={() => setIsSearchOpen(true)}
-          className="w-full flex items-center justify-between px-3.5 py-2 text-xs text-slate-500 bg-slate-100/80 hover:bg-slate-200/70 border border-slate-200 rounded-xl transition-all shadow-xs group"
+          className="w-full flex items-center justify-between px-3.5 py-2 text-xs text-slate-500 bg-slate-100/80 hover:bg-slate-200/70 border border-slate-200 rounded-xl transition-all shadow-xs group cursor-pointer"
         >
           <div className="flex items-center gap-2">
             <Search className="w-4 h-4 text-slate-400 group-hover:text-[#0DA54F] transition-colors" />
@@ -89,7 +68,7 @@ export const Topbar: React.FC = () => {
         </button>
       </div>
 
-      {/* Right Controls: Branch Switcher, Time, Language, Role Switcher */}
+      {/* Right Controls: Time, Branch Switcher, Language, Static Staff Identity Badge, Logout */}
       <div className="flex items-center gap-2 sm:gap-3">
         {/* Wall Clock Time (Asia/Dhaka) */}
         <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-600 bg-slate-50 rounded-lg border border-slate-200">
@@ -101,11 +80,8 @@ export const Topbar: React.FC = () => {
         {/* Branch Selector Dropdown */}
         <div className="relative">
           <button
-            onClick={() => {
-              setIsBranchDropdownOpen(!isBranchDropdownOpen);
-              setIsRoleDropdownOpen(false);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors"
+            onClick={() => setIsBranchDropdownOpen(!isBranchDropdownOpen)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
           >
             <Building2 className="w-3.5 h-3.5 text-[#0DA54F]" />
             <span className="hidden md:inline truncate max-w-[120px]">
@@ -127,7 +103,7 @@ export const Topbar: React.FC = () => {
                     setActiveBranchId(b.id);
                     setIsBranchDropdownOpen(false);
                   }}
-                  className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-50 transition-colors ${
+                  className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-50 transition-colors cursor-pointer ${
                     activeBranchId === b.id ? 'bg-[#0DA54F]/5 text-[#0DA54F] font-semibold' : 'text-slate-700'
                   }`}
                 >
@@ -148,7 +124,7 @@ export const Topbar: React.FC = () => {
         <div className="flex items-center p-0.5 bg-slate-100 rounded-lg border border-slate-200 text-xs">
           <button
             onClick={() => setLanguage('bn')}
-            className={`px-2 py-1 rounded-md font-bengali text-xs transition-all ${
+            className={`px-2 py-1 rounded-md font-bengali text-xs transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               language === 'bn'
                 ? 'bg-white text-[#0DA54F] font-bold shadow-2xs'
                 : 'text-slate-500 hover:text-slate-900'
@@ -158,7 +134,7 @@ export const Topbar: React.FC = () => {
           </button>
           <button
             onClick={() => setLanguage('en')}
-            className={`px-2 py-1 rounded-md text-xs font-semibold transition-all ${
+            className={`px-2 py-1 rounded-md text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               language === 'en'
                 ? 'bg-white text-[#0DA54F] font-bold shadow-2xs'
                 : 'text-slate-500 hover:text-slate-900'
@@ -168,87 +144,38 @@ export const Topbar: React.FC = () => {
           </button>
         </div>
 
-        {/* Role Switcher (Crucial for testing all 8 roles) */}
-        <div className="relative">
-          <button
-            onClick={() => {
-              setIsRoleDropdownOpen(!isRoleDropdownOpen);
-              setIsBranchDropdownOpen(false);
-            }}
-            className="flex items-center gap-2 pl-2 pr-3 py-1.5 text-xs font-medium text-slate-800 bg-[#0DA54F]/10 hover:bg-[#0DA54F]/15 border border-[#0DA54F]/20 rounded-lg transition-all"
-            title="Switch User Role"
-          >
-            <div className="w-5 h-5 rounded-full bg-[#0DA54F] text-white flex items-center justify-center text-[10px] font-bold">
-              {currentUser?.name.charAt(0) || 'D'}
-            </div>
-            <div className="hidden sm:flex flex-col text-left">
-              <span className="text-[11px] font-bold text-[#0DA54F] leading-tight">
-                {currentUser?.role.replace('_', ' ').toUpperCase()}
+        {/* Static Non-Clickable Signed-In Staff Identity Badge */}
+        <div
+          className="flex items-center gap-2 pl-2 pr-3 py-1.5 text-xs bg-[#0DA54F]/8 border border-[#0DA54F]/20 rounded-lg select-none"
+          title={currentUser ? `${currentUser.name} (${currentUser.email})` : undefined}
+        >
+          <div className="w-5 h-5 rounded-full bg-[#0DA54F] text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+            {currentUser?.name.charAt(0) || 'S'}
+          </div>
+          <div className="hidden sm:flex items-center gap-1.5 leading-tight whitespace-nowrap">
+            {currentUser?.employeeId && (
+              <span className="text-[11px] font-mono font-bold text-[#0DA54F]">
+                #{currentUser.employeeId}
               </span>
-            </div>
-            <ChevronDown className="w-3.5 h-3.5 text-[#0DA54F]" />
-          </button>
-
-          {isRoleDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95">
-              {allowRoleSwitcher ? (
-                <>
-                  <div className="px-3 py-2 border-b border-slate-100">
-                    <p className="text-[11px] font-bold text-slate-800">Switch Operational Role</p>
-                    <p className="text-[10px] text-slate-500">
-                      Test SUOXI workflows under any of the 8 clinic roles:
-                    </p>
-                  </div>
-
-                  <div className="max-h-80 overflow-y-auto py-1">
-                    {rolesList.map((item) => (
-                      <button
-                        key={item.role}
-                        onClick={() => {
-                          switchRole(item.role);
-                          setIsRoleDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 text-xs flex items-start gap-2.5 hover:bg-slate-50 transition-colors ${
-                          currentUser?.role === item.role ? 'bg-[#0DA54F]/10 text-[#0DA54F]' : 'text-slate-700'
-                        }`}
-                      >
-                        <div
-                          className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
-                            currentUser?.role === item.role ? 'bg-[#0DA54F]' : 'bg-slate-300'
-                          }`}
-                        />
-                        <div>
-                          <p className="font-semibold">{item.title}</p>
-                          <p className="text-[10px] text-slate-400">{item.subtitle}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="p-3 space-y-2">
-                  <div className="border-b border-slate-100 pb-2">
-                    <p className="text-xs font-bold text-slate-800">{currentUser?.name}</p>
-                    <p className="text-[11px] text-slate-500">{currentUser?.email}</p>
-                    <p className="text-[10px] uppercase font-semibold text-[#0DA54F] mt-0.5">
-                      {currentUser?.role.replace('_', ' ')} · {currentUser?.branchName}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setIsRoleDropdownOpen(false);
-                      logout();
-                    }}
-                    className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>{language === 'bn' ? 'সাইন আউট' : 'Sign Out'}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+            )}
+            <span className="text-slate-300">·</span>
+            <span className="text-[11px] font-bold text-slate-700 uppercase">
+              {currentUser?.role.replace('_', ' ')}
+            </span>
+          </div>
         </div>
+
+        {/* Direct One-Click Logout Button */}
+        <button
+          type="button"
+          onClick={() => void logout()}
+          aria-label={language === 'bn' ? 'লগআউট' : 'Logout'}
+          title={language === 'bn' ? 'লগআউট' : 'Logout'}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:text-rose-600 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 rounded-lg shadow-2xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <LogOut className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden sm:inline">{language === 'bn' ? 'লগআউট' : 'Logout'}</span>
+        </button>
       </div>
     </header>
   );

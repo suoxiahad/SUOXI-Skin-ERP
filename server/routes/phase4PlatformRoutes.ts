@@ -26,6 +26,7 @@ import { runWithAuthContext } from '../auth/requestContext.ts';
 import { canUserAccessBranch } from '../auth/rbacMiddleware.ts';
 import { getOrSetCache, invalidateCachePrefixes } from '../cache/dashboardCache.ts';
 import { checkRedisHealth, isRedisConfigured } from '../cache/redisClient.ts';
+import { isHostedFallbackWithoutDb } from '../config/securityConfig.ts';
 import { checkPgHealth, isPostgresConfigured, pgQuery } from '../db/pgPool.ts';
 import { enqueueClinicJob, getQueueStats } from '../queue/jobQueue.ts';
 import { pgGetFileAssetByPath, pgRecordFileAsset } from '../repositories/pgClinicalSessionsRepo.ts';
@@ -38,8 +39,22 @@ import {
   savePrivateFileBuffer,
 } from '../storage/localFileStorage.ts';
 
+export const PREVIEW_SESSION_COOKIE_NAME = 'suoxi_preview_sid';
+
+export type PreviewAuthResult =
+  | { user: User }
+  | { errorCode: string; statusCode: number; message: string };
+
+export interface PreviewAuthAdapter {
+  authenticate: (identifier: string, password: string) => PreviewAuthResult;
+  getSessionUser: (sessionId: string) => User | undefined;
+  createSession: (user: User, ipAddress: string, deviceInfo: string) => string;
+  revokeSession: (sessionId: string) => void;
+}
+
 export interface Phase4RouterDeps {
   getFallbackUser: () => User;
+  previewAuth?: PreviewAuthAdapter;
 }
 
 const uploadMiddleware = multer({
@@ -58,14 +73,60 @@ const PUBLIC_API_PREFIXES = [
   '/api/v1/webhooks/',
 ];
 
+function parseSimpleCookies(cookieHeader: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (key) {
+      try {
+        out[key] = decodeURIComponent(val);
+      } catch {
+        out[key] = val;
+      }
+    }
+  }
+  return out;
+}
+
+function getPreviewSessionId(req: Request): string | null {
+  const cookies = parseSimpleCookies(req.headers.cookie);
+  const sid = cookies[PREVIEW_SESSION_COOKIE_NAME];
+  if (sid && /^[a-f0-9]{16,128}$/i.test(sid)) {
+    return sid;
+  }
+  return null;
+}
+
+function isPreviewAuthAllowed(): boolean {
+  return (process.env.NODE_ENV !== 'production' || isHostedFallbackWithoutDb()) && !isPostgresConfigured();
+}
+
+function buildPreviewCookieAttributes(req: Request, maxAgeSeconds: number): string {
+  const isHttps =
+    req.secure ||
+    req.headers['x-forwarded-proto'] === 'https' ||
+    process.env.COOKIE_SECURE === 'true';
+  if (isHttps) {
+    return `Path=/; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=${maxAgeSeconds}`;
+  }
+  return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
 /**
  * Middleware mounted before API routes:
  *  - Resolves Redis/PG session if cookie is present and attaches `req.authUser` & `req.sessionId`.
+ *  - In non-production preview mode or Cloud Run fallback (without DATABASE_URL), also resolves preview session cookie if present.
  *  - When production auth is enabled (`DATABASE_URL` set & demo switcher disabled),
  *    blocks unauthenticated requests to protected `/api/v1/*` routes with `401 AUTH_REQUIRED`.
  *  - Automatically invalidates Redis dashboard caches on mutating requests.
  */
-export function createPhase4AuthMiddleware() {
+export function createPhase4AuthMiddleware(options?: {
+  resolvePreviewUser?: (req: Request, previewSessionId: string) => User | undefined;
+}) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const authedReq = req as AuthedRequest;
 
@@ -88,6 +149,19 @@ export function createPhase4AuthMiddleware() {
       if (session) {
         authedReq.authUser = session.user;
         authedReq.sessionId = session.sessionId;
+      } else if (
+        !isProductionAuthEnabled() &&
+        isPreviewAuthAllowed() &&
+        options?.resolvePreviewUser
+      ) {
+        const previewSid = getPreviewSessionId(req);
+        if (previewSid) {
+          const previewUser = options.resolvePreviewUser(req, previewSid);
+          if (previewUser) {
+            authedReq.authUser = previewUser;
+            authedReq.sessionId = previewSid;
+          }
+        }
       }
     } catch (err) {
       console.warn('[SUOXI Auth] Session resolution notice:', err instanceof Error ? err.message : err);
@@ -143,7 +217,7 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
       checkRedisHealth(),
       Promise.resolve(getPrivateStorageHealth()),
     ]);
-    const ready = (!isPostgresConfigured() && process.env.NODE_ENV !== 'production') || pgHealth.ok;
+    const ready = isPreviewAuthAllowed() || pgHealth.ok;
     const status = ready ? 200 : 503;
     return res.status(status).json({
       status: ready ? 'ready' : 'not_ready',
@@ -156,7 +230,7 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
   router.get('/api/v1/ready', handleReadiness);
   router.get('/readyz', handleReadiness);
 
-  router.get('/api/v1/auth/me', (req, res, next) => {
+  router.get('/api/v1/auth/me', (req, res) => {
     const authed = req as AuthedRequest;
     if (isProductionAuthEnabled()) {
       if (!authed.authUser) {
@@ -169,7 +243,20 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
       });
     }
 
-    // Preview mode: return current fallback user along with mode flags
+    if (deps.previewAuth && isPreviewAuthAllowed()) {
+      const previewSid = getPreviewSessionId(req);
+      const previewUser = previewSid ? deps.previewAuth.getSessionUser(previewSid) : undefined;
+      if (!previewUser) {
+        return sendPgError(res, 401, 'AUTH_REQUIRED', 'Not authenticated');
+      }
+      return sendPgSuccess(res, {
+        user: previewUser,
+        authMode: 'preview_demo',
+        allowRoleSwitcher: isDemoRoleSwitcherAllowed(),
+      });
+    }
+
+    // Fallback when no preview session manager is wired
     return sendPgSuccess(res, {
       user: authed.authUser || deps.getFallbackUser(),
       authMode: 'preview_demo',
@@ -178,7 +265,49 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
   });
 
   router.post('/api/v1/auth/login', async (req, res) => {
+    const schema = z
+      .object({
+        identifier: z.string().trim().min(1).optional(),
+        employeeId: z.string().trim().min(1).optional(),
+        email: z.string().trim().min(1).optional(),
+        password: z.string().min(1, 'Password is required'),
+      })
+      .refine((v) => Boolean(v.identifier || v.employeeId || v.email), {
+        message: 'Employee ID or staff email is required',
+      });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendPgError(res, 400, 'VALIDATION_ERROR', 'Employee ID and password are required', parsed.error.format());
+    }
+
+    const loginIdentifier = parsed.data.identifier || parsed.data.employeeId || parsed.data.email || '';
+
     if (!isPostgresConfigured()) {
+      if (isPreviewAuthAllowed() && deps.previewAuth) {
+        const result = deps.previewAuth.authenticate(loginIdentifier, parsed.data.password);
+        if ('errorCode' in result) {
+          return sendPgError(res, result.statusCode, result.errorCode, result.message);
+        }
+
+        const ipAddress = extractClientIp(req.headers, req.ip || '127.0.0.1');
+        const deviceInfo = String(req.headers['user-agent'] || 'Web Browser').slice(0, 180);
+        const previewSid = deps.previewAuth.createSession(result.user, ipAddress, deviceInfo);
+        const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
+
+        res.append(
+          'Set-Cookie',
+          `${PREVIEW_SESSION_COOKIE_NAME}=${encodeURIComponent(previewSid)}; ${buildPreviewCookieAttributes(req, 8 * 60 * 60)}`
+        );
+
+        return sendPgSuccess(res, {
+          user: result.user,
+          mustChangePassword: false,
+          expiresAt,
+          authMode: 'preview_demo',
+          allowRoleSwitcher: isDemoRoleSwitcherAllowed(),
+        });
+      }
+
       return sendPgError(
         res,
         400,
@@ -187,18 +316,9 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
       );
     }
 
-    const schema = z.object({
-      email: z.string().email('Valid staff email is required'),
-      password: z.string().min(1, 'Password is required'),
-    });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid login credentials format', parsed.error.format());
-    }
-
     try {
       const session = await loginWithPassword({
-        email: parsed.data.email,
+        identifier: loginIdentifier,
         password: parsed.data.password,
         req,
         res,
@@ -220,6 +340,18 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
     try {
       const authed = req as AuthedRequest;
       await logoutSession(req, res, authed.authUser);
+
+      if (deps.previewAuth && isPreviewAuthAllowed()) {
+        const previewSid = getPreviewSessionId(req);
+        if (previewSid) {
+          deps.previewAuth.revokeSession(previewSid);
+        }
+        res.append(
+          'Set-Cookie',
+          `${PREVIEW_SESSION_COOKIE_NAME}=; ${buildPreviewCookieAttributes(req, 0)}`
+        );
+      }
+
       return sendPgSuccess(res, { loggedOut: true });
     } catch (err) {
       return sendPgError(res, 500, 'LOGOUT_FAILED', err instanceof Error ? err.message : 'Logout failed');
@@ -260,17 +392,14 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
     }
   });
 
-  // Lock Demo Role Switcher strictly in production mode
-  router.post('/api/v1/auth/switch-role', (req, res, next) => {
-    if (!isDemoRoleSwitcherAllowed()) {
-      return sendPgError(
-        res,
-        403,
-        'DEMO_DISABLED_IN_PRODUCTION',
-        'Demo role switching is disabled in production. Please sign in with an authorized staff account.'
-      );
-    }
-    return next();
+  // Role switching permanently removed — reject any calls to /api/v1/auth/switch-role
+  router.post('/api/v1/auth/switch-role', (_req, res) => {
+    return sendPgError(
+      res,
+      403,
+      'DEMO_DISABLED_IN_PRODUCTION',
+      'Demo role switching is disabled. Please sign in with your Employee ID and password.'
+    );
   });
 
   // ===========================================================================

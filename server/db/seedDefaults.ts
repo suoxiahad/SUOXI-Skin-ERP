@@ -170,8 +170,8 @@ async function run(): Promise<void> {
     process.exit(1);
   }
 
-  const initialAdminPassword = process.env.SEED_ADMIN_PASSWORD || 'SuoxiDevOnly@2026!';
-  const adminHash = await argon2.hash(initialAdminPassword);
+  const initialDevPassword = process.env.SEED_ADMIN_PASSWORD || '123456';
+  const devHash = await argon2.hash(initialDevPassword, { type: argon2.argon2id });
 
   await withPgTransaction(async (client) => {
     for (const br of BRANCHES) {
@@ -211,33 +211,213 @@ async function run(): Promise<void> {
       );
     }
 
-    const defaultUsers = [
+    const defaultUsers: Array<{
+      id: string;
+      employeeId: string;
+      name: string;
+      nameBn: string;
+      email: string;
+      role: string;
+      phone: string;
+      branchId: string;
+      branchName: string;
+      designation: string;
+      specialization?: string;
+      bmdcRegNo?: string;
+      consultationFeeBDT?: number;
+      followUpFeeBDT?: number;
+      roomNumber?: string;
+    }> = [
       {
-        id: 'usr-admin-1',
-        name: 'SUOXI Super Admin',
-        nameBn: 'সুপার অ্যাডমিন',
-        email: 'admin@suoxiclinic.com',
+        id: 'usr-100',
+        employeeId: '0001',
+        name: 'Kabir Ahmed',
+        nameBn: 'কবির আহমেদ',
+        email: 'director@suoxiclinic.com',
         role: 'super_admin',
         phone: '+8801700000001',
         branchId: 'br-dhanmondi',
         branchName: 'Dhanmondi Main Center',
-        designation: 'Managing Director',
+        designation: 'Managing Director & Founder',
       },
       {
         id: 'usr-101',
+        employeeId: '0002',
         name: 'Dr. Nusrat Jahan',
         nameBn: 'ডাঃ নুসরাত জাহান',
-        email: 'dr.nusrat@suoxiclinic.com',
+        email: 'nusrat.jahan@suoxiclinic.com',
         role: 'doctor',
-        phone: '+8801711112233',
+        phone: '+8801711223344',
         branchId: 'br-dhanmondi',
         branchName: 'Dhanmondi Main Center',
-        specialization: 'MD (Dermatology & Venereology), Aesthetic Physician',
+        specialization: 'MBBS, DDV, Consultant Aesthetic Dermatologist',
         bmdcRegNo: 'BMDC-A-48921',
+        consultationFeeBDT: 2000,
+        followUpFeeBDT: 1000,
+        roomNumber: 'Room 201 (Laser Suite A)',
+        designation: 'Senior Consultant Aesthetic Dermatologist',
+      },
+      {
+        id: 'usr-102',
+        employeeId: '0003',
+        name: 'Dr. Farhana Khan',
+        nameBn: 'ডাঃ ফারহানা খান',
+        email: 'farhana.khan@suoxiclinic.com',
+        role: 'doctor',
+        phone: '+8801811223355',
+        branchId: 'br-gulshan',
+        branchName: 'Gulshan-2 Aesthetic Lounge',
+        specialization: 'MBBS, FCPS (Dermatology), Facial Aesthetics',
+        bmdcRegNo: 'BMDC-A-51204',
+        consultationFeeBDT: 2500,
+        followUpFeeBDT: 1200,
+        roomNumber: 'Room 302 (Anti-Aging Suite)',
+        designation: 'Consultant Cosmetic Dermatologist',
+      },
+      {
+        id: 'usr-108',
+        employeeId: '0004',
+        name: 'Dr. Tanvir Ahmed',
+        nameBn: 'ডাঃ তানভীর আহমেদ',
+        email: 'tanvir.ahmed@suoxiclinic.com',
+        role: 'doctor',
+        phone: '+8801911334455',
+        branchId: 'br-uttara',
+        branchName: 'Uttara Sector-3 Clinic',
+        specialization: 'MBBS, MCPS (Derma), Fellow Trichology (UK)',
+        bmdcRegNo: 'BMDC-A-62390',
+        consultationFeeBDT: 1800,
+        followUpFeeBDT: 900,
+        roomNumber: 'Room 105 (Trichology Suite)',
+        designation: 'Clinical Aesthetician & Trichologist',
+      },
+      {
+        id: 'usr-109',
+        employeeId: '0005',
+        name: 'Sabrina Mostafa',
+        nameBn: 'সাবরিনা মোস্তফা',
+        email: 'sabrina.m@suoxiclinic.com',
+        role: 'doctor',
+        phone: '+8801722445566',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        specialization: 'MBBS, Diploma in Clinical Dermatology',
+        bmdcRegNo: 'BMDC-A-70112',
         consultationFeeBDT: 1500,
         followUpFeeBDT: 800,
-        roomNumber: 'Room 201',
-        designation: 'Chief Consultant Dermatologist',
+        roomNumber: 'Room 203 (Consultation)',
+        designation: 'Resident Medical Officer (Aesthetic)',
+      },
+      {
+        id: 'usr-105',
+        employeeId: '0006',
+        name: 'Rina Begum',
+        nameBn: 'রিনা বেগম',
+        email: 'therapist.rina@suoxiclinic.com',
+        role: 'therapist',
+        phone: '+8801755443322',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        roomNumber: 'Treatment Suite 1',
+        designation: 'Lead Aesthetic & Laser Therapist',
+      },
+      {
+        id: 'usr-110',
+        employeeId: '0007',
+        name: 'Nasreen Sultana',
+        nameBn: 'নাসরিন সুলতানা',
+        email: 'nasreen.sultana@suoxiclinic.com',
+        role: 'therapist',
+        phone: '+8801822334466',
+        branchId: 'br-gulshan',
+        branchName: 'Gulshan-2 Aesthetic Lounge',
+        roomNumber: 'Treatment Suite 2',
+        designation: 'Senior Skin & Laser Therapist',
+      },
+      {
+        id: 'usr-111',
+        employeeId: '0008',
+        name: 'Tania Akter',
+        nameBn: 'তানিয়া আক্তার',
+        email: 'tania.therapist@suoxiclinic.com',
+        role: 'therapist',
+        phone: '+8801933445577',
+        branchId: 'br-uttara',
+        branchName: 'Uttara Sector-3 Clinic',
+        roomNumber: 'Treatment Suite 3',
+        designation: 'Aesthetic Laser Therapist',
+      },
+      {
+        id: 'usr-103',
+        employeeId: '0009',
+        name: 'Fatima Zohra',
+        nameBn: 'ফাতিমা জোহরা',
+        email: 'reception.dhanmondi@suoxiclinic.com',
+        role: 'receptionist',
+        phone: '+8801799887766',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        designation: 'Front Desk & Patient Relations Executive',
+      },
+      {
+        id: 'usr-112',
+        employeeId: '0010',
+        name: 'Mehedi Hasan',
+        nameBn: 'মেহেদী হাসান',
+        email: 'reception.gulshan@suoxiclinic.com',
+        role: 'receptionist',
+        phone: '+8801855667788',
+        branchId: 'br-gulshan',
+        branchName: 'Gulshan-2 Aesthetic Lounge',
+        designation: 'Front Desk Executive',
+      },
+      {
+        id: 'usr-106',
+        employeeId: '0011',
+        name: 'Shamim Hossain',
+        nameBn: 'শামীম হোসেন',
+        email: 'accounts@suoxiclinic.com',
+        role: 'cashier',
+        phone: '+8801844778899',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        designation: 'Senior Cashier & Accounts Officer',
+      },
+      {
+        id: 'usr-107',
+        employeeId: '0012',
+        name: 'Sharmin Sultana',
+        nameBn: 'শারমিন সুলতানা',
+        email: 'inventory@suoxiclinic.com',
+        role: 'inventory_manager',
+        phone: '+8801966554433',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        designation: 'Pharmacy & Inventory Manager',
+      },
+      {
+        id: 'usr-104',
+        employeeId: '0013',
+        name: 'Tania Khan',
+        nameBn: 'তানিয়া খান',
+        email: 'callcenter.agent1@suoxiclinic.com',
+        role: 'call_center',
+        phone: '+8801833221100',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        designation: 'Lead Tele-Triage & Follow-up Agent',
+      },
+      {
+        id: 'usr-113',
+        employeeId: '0014',
+        name: 'Farzana Yasmin',
+        nameBn: 'ফারজানা ইয়াসমিন',
+        email: 'admin.dhanmondi@suoxiclinic.com',
+        role: 'admin_manager',
+        phone: '+8801711998877',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+        designation: 'Clinic Operations Manager',
       },
     ];
 
@@ -245,19 +425,20 @@ async function run(): Promise<void> {
       await client.query(
         `
         INSERT INTO users (
-          id, name, name_bn, email, password_hash, must_change_password, role, phone,
+          id, employee_id, name, name_bn, email, password_hash, must_change_password, role, phone,
           branch_id, branch_name, specialization, bmdc_reg_no, consultation_fee_bdt,
           follow_up_fee_bdt, room_number, status, designation
         )
-        VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15)
+        VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'active', $16)
         ON CONFLICT (id) DO NOTHING
         `,
         [
           u.id,
+          u.employeeId,
           u.name,
           u.nameBn,
           u.email,
-          adminHash,
+          devHash,
           u.role,
           u.phone,
           u.branchId,

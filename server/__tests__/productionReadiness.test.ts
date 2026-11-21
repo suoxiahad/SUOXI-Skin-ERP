@@ -176,12 +176,12 @@ async function seedCoreFixtures() {
 
   // Users
   await pgQuery(
-    `INSERT INTO users (id, name, email, role, phone, branch_id, branch_name, status, password_hash, must_change_password)
+    `INSERT INTO users (id, employee_id, name, email, role, phone, branch_id, branch_name, status, password_hash, must_change_password)
      VALUES
-       ('usr-admin', 'Super Admin', 'admin@suoxi.tech', 'super_admin', '+8801700000001', 'br-dhanmondi', 'Dhanmondi Main Center', 'active', $1, FALSE),
-       ('usr-doc-dhn', 'Dr. Nusrat Jahan', 'doctor.dhn@suoxi.tech', 'doctor', '+8801700000002', 'br-dhanmondi', 'Dhanmondi Main Center', 'active', $2, FALSE),
-       ('usr-recep-dhn', 'Fatima Reception', 'recep.dhn@suoxi.tech', 'receptionist', '+8801700000003', 'br-dhanmondi', 'Dhanmondi Main Center', 'active', $3, FALSE),
-       ('usr-recep-gls', 'Gulshan Desk', 'recep.gls@suoxi.tech', 'receptionist', '+8801700000004', 'br-gulshan', 'Gulshan Lounge', 'active', $3, FALSE)
+       ('usr-admin', 'SX-1001', 'Super Admin', 'admin@suoxi.tech', 'super_admin', '+8801700000001', 'br-dhanmondi', 'Dhanmondi Main Center', 'active', $1, FALSE),
+       ('usr-doc-dhn', 'SX-1002', 'Dr. Nusrat Jahan', 'doctor.dhn@suoxi.tech', 'doctor', '+8801700000002', 'br-dhanmondi', 'Dhanmondi Main Center', 'active', $2, FALSE),
+       ('usr-recep-dhn', 'SX-1003', 'Fatima Reception', 'recep.dhn@suoxi.tech', 'receptionist', '+8801700000003', 'br-dhanmondi', 'Dhanmondi Main Center', 'active', $3, FALSE),
+       ('usr-recep-gls', 'SX-1004', 'Gulshan Desk', 'recep.gls@suoxi.tech', 'receptionist', '+8801700000004', 'br-gulshan', 'Gulshan Lounge', 'active', $3, FALSE)
      ON CONFLICT (id) DO NOTHING`,
     [adminHash, docHash, recepHash]
   );
@@ -269,18 +269,19 @@ async function main() {
   setPgPoolOverride(createPGlitePool(pgDb));
 
   // 1. Clean-database migrations + idempotency + checksum verification
-  await test('1. Clean PostgreSQL migrations (0001 -> 0002 -> 0003) & idempotency', async () => {
+  await test('1. Clean PostgreSQL migrations (0001 -> 0004) & idempotency', async () => {
     const first = await runPgMigrations({ silent: true, useAdvisoryLock: false });
-    assert.equal(first.applied.length, 3, `Expected 3 migrations applied, got ${first.applied.join(',')}`);
+    assert.equal(first.applied.length, 4, `Expected 4 migrations applied, got ${first.applied.join(',')}`);
     assert.deepEqual(first.applied, [
       '0001_initial_schema.sql',
       '0002_referrals_and_ops_columns.sql',
       '0003_complete_erp_modules_and_integrity.sql',
+      '0004_staff_employee_id.sql',
     ]);
 
     const second = await runPgMigrations({ silent: true, useAdvisoryLock: false });
     assert.equal(second.applied.length, 0);
-    assert.equal(second.skipped.length, 3);
+    assert.equal(second.skipped.length, 4);
 
     const status = await getMigrationStatus();
     assert.equal(status.every((s) => s.status === 'applied'), true);
@@ -288,7 +289,7 @@ async function main() {
     const health = await checkPgHealth();
     assert.equal(health.ok, true);
     assert.equal(health.schemaReady, true);
-    assert.equal(health.migrationsApplied, 3);
+    assert.equal(health.migrationsApplied, 4);
   });
 
   await test('2. Migration checksum tampering detection rejects modified applied migrations', async () => {
@@ -790,12 +791,13 @@ async function main() {
         const csrfRes = await httpReq(baseUrl, 'GET', '/api/v1/csrf-token');
         const csrf = csrfRes.body.data.csrfToken;
 
-        // Login as Dhanmondi Receptionist
+        // Login as Dhanmondi Receptionist using Employee ID (case-insensitive)
         const loginRes = await httpReq(baseUrl, 'POST', '/api/v1/auth/login', {
           headers: { 'x-csrf-token': csrf },
-          body: { email: 'recep.dhn@suoxi.tech', password: 'RecepStrong#2026!' },
+          body: { identifier: 'sx-1003', password: 'RecepStrong#2026!' },
         });
         assert.equal(loginRes.status, 200);
+        assert.equal(loginRes.body.data.user.employeeId, 'SX-1003');
         const staffCookie = extractCookie(loginRes.headers['set-cookie'], 'suoxi_sid');
         assert.ok(staffCookie.startsWith('suoxi_sid='));
 

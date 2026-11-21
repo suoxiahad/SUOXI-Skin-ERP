@@ -22,15 +22,15 @@ interface AppContextType {
   setCurrentUser: (u: User) => void;
   userRole: UserRole;
   authRequired: boolean;
-  allowRoleSwitcher: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  mustChangePassword: boolean;
+  clearMustChangePassword: () => void;
+  login: (identifier: string, password: string) => Promise<{ mustChangePassword?: boolean }>;
   logout: () => Promise<void>;
   branches: Branch[];
   activeBranchId: string;
   setActiveBranchId: (id: string) => void;
   language: Language;
   setLanguage: (lang: Language) => void;
-  switchRole: (role: UserRole, branchId?: string) => Promise<void>;
   toasts: ToastMessage[];
   addToast: (toast: Omit<ToastMessage, 'id'>) => void;
   removeToast: (id: string) => void;
@@ -365,7 +365,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean>(false);
-  const [allowRoleSwitcher, setAllowRoleSwitcher] = useState<boolean>(true);
+  const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [activeBranchId, setActiveBranchId] = useState<string>('br-dhanmondi');
   const [language, setLanguage] = useState<Language>('en');
@@ -497,7 +497,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const loadAuthenticatedContext = async () => {
     const [mePayload, branchList] = await Promise.all([api.auth.meWithMeta(), api.branches.list()]);
     setCurrentUser(mePayload.user);
-    setAllowRoleSwitcher(mePayload.allowRoleSwitcher !== false);
     setAuthRequired(false);
     setBranches(branchList);
     if (mePayload.user.branchId) {
@@ -513,7 +512,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       } catch (err) {
         if (err instanceof ApiClientError && err.status === 401) {
           setAuthRequired(true);
-          setAllowRoleSwitcher(false);
           setCurrentUser(null);
         } else {
           console.error('Initialization error:', err);
@@ -523,11 +521,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     init();
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const result = await api.auth.login(email, password);
+  const login = async (identifier: string, password: string) => {
+    const result = await api.auth.login(identifier, password);
     setCurrentUser(result.user);
-    setAllowRoleSwitcher(result.allowRoleSwitcher === true);
-    setAuthRequired(false);
+    const needsPwdReset = Boolean(result.mustChangePassword);
+    setMustChangePassword(needsPwdReset);
+    setAuthRequired(needsPwdReset);
     try {
       const branchList = await api.branches.list();
       setBranches(branchList);
@@ -537,6 +536,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (result.user.branchId) {
       setActiveBranchId(result.user.branchId);
     }
+    return { mustChangePassword: needsPwdReset };
+  };
+
+  const clearMustChangePassword = () => {
+    setMustChangePassword(false);
+    setAuthRequired(false);
   };
 
   const logout = async () => {
@@ -544,8 +549,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await api.auth.logout();
     } finally {
       setCurrentUser(null);
+      setMustChangePassword(false);
       setAuthRequired(true);
-      setAllowRoleSwitcher(false);
     }
   };
 
@@ -574,40 +579,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const switchRole = async (role: UserRole, branchId?: string) => {
-    try {
-      const updatedUser = await api.auth.switchRole(role, branchId || activeBranchId);
-      setCurrentUser(updatedUser);
-      // Auto route to primary role view using canonical Option B slug
-      if (role === 'doctor') {
-        navigate('/doctor');
-      } else if (role === 'call_center') {
-        navigate('/crm/followups');
-      } else if (role === 'cashier') {
-        navigate('/billing');
-      } else if (role === 'inventory_manager') {
-        navigate('/inventory');
-      } else if (role === 'therapist') {
-        navigate('/packages/sessions');
-      } else if (role === 'patient') {
-        navigate('/portal');
-      } else {
-        navigate('/crm/appointments');
-      }
-      addToast({
-        type: 'info',
-        title: `Switched role to ${role.replace('_', ' ').toUpperCase()}`,
-        description: `Active as ${updatedUser.name} (${updatedUser.branchName})`,
-      });
-    } catch (err: unknown) {
-      addToast({
-        type: 'error',
-        title: 'Role switch failed',
-        description: (err as Error).message,
-      });
-    }
-  };
-
   const userRole = currentUser?.role || 'doctor';
 
   return (
@@ -617,7 +588,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setCurrentUser,
         userRole,
         authRequired,
-        allowRoleSwitcher,
+        mustChangePassword,
+        clearMustChangePassword,
         login,
         logout,
         branches,
@@ -625,7 +597,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setActiveBranchId,
         language,
         setLanguage,
-        switchRole,
         toasts,
         addToast,
         removeToast,

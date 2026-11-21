@@ -54,7 +54,6 @@ export const t = {
     retry: 'Retry',
     doctorOnlyNextSession: 'Only a licensed Doctor can specify the Next Session Date.',
     noDuplicateDeductions: 'Package sessions are strictly protected against duplicate deduction.',
-    switchRoleNotice: 'Switch role to test different clinic workflows:',
   },
   bn: {
     appTitle: 'সুওক্সি এস্থেটিক সিআরএম',
@@ -106,6 +105,5 @@ export const t = {
     retry: 'পুনরায় চেষ্টা করুন',
     doctorOnlyNextSession: 'কেবলমাত্র সংশ্লিষ্ট ডাক্তার পরবর্তী সেশনের তারিখ নির্ধারণ করতে পারেন।',
     noDuplicateDeductions: 'প্যাকেজের কোনো সেশন দুবার কর্তন করা কঠোরভাবে নিষিদ্ধ।',
-    switchRoleNotice: 'বিভিন্ন ক্লিনিক্যাল ভূমিকার কার্যপদ্ধতি পরখ করতে রোল পরিবর্তন করুন:',
   },
 };

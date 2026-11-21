@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -5,6 +6,18 @@ import path from 'node:path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const DEV_ONLY_JWT_PLACEHOLDER = 'suoxi_dev_only_jwt_secret_must_be_min_32_chars_long';
+const EPHEMERAL_CLOUD_RUN_JWT_SECRET = crypto.randomBytes(32).toString('hex');
+
+function isManagedCloudRunWithoutDb(envInput: Record<string, string | undefined>): boolean {
+  const isCloudRun = Boolean(
+    (envInput.K_SERVICE || envInput.K_REVISION || envInput.K_CONFIGURATION || '').trim()
+  );
+  const hasDb = Boolean(
+    (envInput.DATABASE_URL || '').trim() ||
+      (envInput.PGHOST && envInput.PGDATABASE && envInput.PGUSER)
+  );
+  return isCloudRun && !hasDb && envInput.REQUIRE_AUTH !== 'true';
+}
 
 export const envSchema = z
   .object({
@@ -70,7 +83,21 @@ export const envSchema = z
 export type AppConfig = z.infer<typeof envSchema>;
 
 export function parseConfig(envInput: Record<string, string | undefined> = process.env): AppConfig {
-  return envSchema.parse(envInput);
+  const normalized: Record<string, string | undefined> = { ...envInput };
+  const rawJwt = (normalized.JWT_SECRET || '').trim();
+  const rawSession = (normalized.SESSION_SECRET || '').trim();
+
+  if ((!rawJwt || rawJwt === DEV_ONLY_JWT_PLACEHOLDER) && rawSession.length >= 32) {
+    normalized.JWT_SECRET = rawSession;
+  } else if (
+    normalized.NODE_ENV === 'production' &&
+    isManagedCloudRunWithoutDb(normalized) &&
+    (!rawJwt || rawJwt.length < 32 || rawJwt === DEV_ONLY_JWT_PLACEHOLDER)
+  ) {
+    normalized.JWT_SECRET = EPHEMERAL_CLOUD_RUN_JWT_SECRET;
+  }
+
+  return envSchema.parse(normalized);
 }
 
 export function getRedactedConfig(config: AppConfig): Record<string, unknown> {

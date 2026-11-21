@@ -15,6 +15,27 @@ export function isProductionRuntime(): boolean {
   return process.env.NODE_ENV === 'production';
 }
 
+export function hasPostgresEnvConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+  const dbUrl = (env.DATABASE_URL || '').trim();
+  if (dbUrl.startsWith('postgresql://') || dbUrl.startsWith('postgres://')) {
+    return true;
+  }
+  return Boolean(env.PGHOST && env.PGDATABASE && env.PGUSER);
+}
+
+export function isCloudRunRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean((env.K_SERVICE || env.K_REVISION || env.K_CONFIGURATION || '').trim());
+}
+
+/**
+ * True only when running inside managed Cloud Run hosting without a PostgreSQL
+ * database attached and without REQUIRE_AUTH=true.
+ * Real VPS and PostgreSQL production deployments ALWAYS enforce fail-closed checks.
+ */
+export function isHostedFallbackWithoutDb(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isCloudRunRuntime(env) && !hasPostgresEnvConfig(env) && env.REQUIRE_AUTH !== 'true';
+}
+
 /**
  * Validates required production security invariants at startup.
  * In NODE_ENV=production, missing secrets, MySQL URLs, or demo flags MUST fail closed.
@@ -30,22 +51,30 @@ export function validateProductionSecurity(env: NodeJS.ProcessEnv = process.env)
   }
 
   if (isProd) {
-    if (!dbUrl || (!dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('postgres://'))) {
-      errors.push('Production requires DATABASE_URL starting with postgresql:// or postgres://');
-    }
-
     if (env.ENABLE_DEMO_ROLE_SWITCHER === 'true') {
       errors.push('ENABLE_DEMO_ROLE_SWITCHER=true is strictly forbidden in production.');
     }
 
-    const sessionSecret = (env.SESSION_SECRET || env.JWT_SECRET || '').trim();
-    if (sessionSecret.length < 32) {
-      errors.push('Production requires SESSION_SECRET (or JWT_SECRET) of at least 32 characters.');
-    }
+    const hostedFallback = isHostedFallbackWithoutDb(env);
 
-    const masterKey = (env.APP_MASTER_KEY || '').trim();
-    if (masterKey.length < 32) {
-      errors.push('Production requires APP_MASTER_KEY of at least 32 characters for field/integration encryption.');
+    if (hostedFallback) {
+      warnings.push(
+        'Running in managed Cloud Run mode without DATABASE_URL; using ephemeral runtime encryption keys and preview clinic data.'
+      );
+    } else {
+      if (!dbUrl || (!dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('postgres://'))) {
+        errors.push('Production requires DATABASE_URL starting with postgresql:// or postgres://');
+      }
+
+      const sessionSecret = (env.SESSION_SECRET || env.JWT_SECRET || '').trim();
+      if (sessionSecret.length < 32) {
+        errors.push('Production requires SESSION_SECRET (or JWT_SECRET) of at least 32 characters.');
+      }
+
+      const masterKey = (env.APP_MASTER_KEY || '').trim();
+      if (masterKey.length < 32) {
+        errors.push('Production requires APP_MASTER_KEY of at least 32 characters for field/integration encryption.');
+      }
     }
 
     const corsOrigin = (env.CORS_ORIGIN || '').trim();
@@ -78,14 +107,15 @@ export function assertProductionSecurityOrThrow(env: NodeJS.ProcessEnv = process
 
 /**
  * Returns a 32-byte AES-256 key derived from APP_MASTER_KEY.
- * In production, strictly fails closed if APP_MASTER_KEY is missing or < 32 chars.
+ * In production, strictly fails closed if APP_MASTER_KEY is missing or < 32 chars
+ * (except in Cloud Run preview mode without PostgreSQL).
  */
 export function getEncryptionMasterKey(): Buffer {
   const raw = (process.env.APP_MASTER_KEY || '').trim();
   if (raw.length >= 32) {
     return crypto.createHash('sha256').update(raw).digest();
   }
-  if (isProductionRuntime()) {
+  if (isProductionRuntime() && !isHostedFallbackWithoutDb()) {
     throw new Error('APP_MASTER_KEY (>= 32 chars) is required in production');
   }
   // Ephemeral per-process random dev key when running locally without APP_MASTER_KEY

@@ -37,6 +37,7 @@ function mapBranchRow(row: Record<string, unknown>): Branch {
 function mapUserRow(row: Record<string, unknown>): User {
   return {
     id: String(row.id),
+    employeeId: row.employee_id ? String(row.employee_id) : undefined,
     name: String(row.name),
     nameBn: row.name_bn ? String(row.name_bn) : undefined,
     email: String(row.email),
@@ -255,7 +256,7 @@ export const pgOrgRepo = {
       params.push(`%${filters.search.trim().toLowerCase()}%`);
       const p = `$${params.length}`;
       conditions.push(
-        `(LOWER(name) LIKE ${p} OR LOWER(COALESCE(name_bn, '')) LIKE ${p} OR LOWER(email) LIKE ${p} OR phone LIKE ${p} OR LOWER(COALESCE(specialization, '')) LIKE ${p} OR LOWER(COALESCE(bmdc_reg_no, '')) LIKE ${p})`
+        `(LOWER(name) LIKE ${p} OR LOWER(COALESCE(employee_id, '')) LIKE ${p} OR LOWER(COALESCE(name_bn, '')) LIKE ${p} OR LOWER(email) LIKE ${p} OR phone LIKE ${p} OR LOWER(COALESCE(specialization, '')) LIKE ${p} OR LOWER(COALESCE(bmdc_reg_no, '')) LIKE ${p})`
       );
     }
 
@@ -284,24 +285,46 @@ export const pgOrgRepo = {
       const rawPassword = input.password || `Suoxi@${crypto.randomInt(1000, 9999)}`;
       const passwordHash = await argon2.hash(rawPassword);
 
+      let employeeId = input.employeeId ? input.employeeId.trim().toUpperCase() : '';
+      if (!employeeId) {
+        const maxRes = await client.query<{ max_num: string | null }>(
+          "SELECT MAX(CAST(employee_id AS INTEGER))::text AS max_num FROM users WHERE employee_id ~ '^[0-9]+$'"
+        );
+        const countRes = await client.query<{ cnt: string }>('SELECT COUNT(*)::text AS cnt FROM users');
+        const nextNum = Math.max(Number(maxRes.rows[0]?.max_num || 0), Number(countRes.rows[0]?.cnt || 0)) + 1;
+        employeeId = String(nextNum).padStart(4, '0');
+      }
+
+      const dupEmp = await client.query('SELECT id FROM users WHERE UPPER(employee_id) = $1 LIMIT 1', [employeeId]);
+      if (dupEmp.rows.length > 0) {
+        const err = new Error(`Employee ID '${employeeId}' is already assigned to another staff member`) as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        err.statusCode = 409;
+        err.code = 'DUPLICATE_EMPLOYEE_ID';
+        throw err;
+      }
+
       const res = await client.query(
         `
         INSERT INTO users (
-          id, name, name_bn, email, password_hash, must_change_password, role, phone,
+          id, employee_id, name, name_bn, email, password_hash, must_change_password, role, phone,
           branch_id, branch_name, specialization, bmdc_reg_no, consultation_fee_bdt,
           follow_up_fee_bdt, room_number, certifications, shift, status, designation,
           created_at, updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13,
-          $14, $15, $16::jsonb, $17, 'active', $18,
+          $1, $2, $3, $4, $5, $6, $7, $8, $9,
+          $10, $11, $12, $13, $14,
+          $15, $16, $17::jsonb, $18, 'active', $19,
           NOW(), NOW()
         )
         RETURNING *
         `,
         [
           id,
+          employeeId,
           input.name,
           input.nameBn || null,
           input.email.trim().toLowerCase(),
@@ -366,32 +389,55 @@ export const pgOrgRepo = {
         }
       }
 
+      const nextEmployeeId =
+        patch.employeeId !== undefined
+          ? patch.employeeId.trim().toUpperCase() || null
+          : cur.employeeId ?? null;
+
+      if (nextEmployeeId && nextEmployeeId !== cur.employeeId) {
+        const dupEmp = await client.query(
+          'SELECT id FROM users WHERE UPPER(employee_id) = $1 AND id <> $2 LIMIT 1',
+          [nextEmployeeId, id]
+        );
+        if (dupEmp.rows.length > 0) {
+          const err = new Error(`Employee ID '${nextEmployeeId}' is already assigned to another staff member`) as Error & {
+            statusCode?: number;
+            code?: string;
+          };
+          err.statusCode = 409;
+          err.code = 'DUPLICATE_EMPLOYEE_ID';
+          throw err;
+        }
+      }
+
       const nextRole = patch.role ?? cur.role;
       const res = await client.query(
         `
         UPDATE users SET
-          name = $2,
-          name_bn = $3,
-          email = $4,
-          role = $5,
-          phone = $6,
-          branch_id = $7,
-          branch_name = $8,
-          specialization = $9,
-          bmdc_reg_no = $10,
-          consultation_fee_bdt = $11,
-          follow_up_fee_bdt = $12,
-          room_number = $13,
-          certifications = $14::jsonb,
-          shift = $15,
-          status = $16,
-          designation = $17,
+          employee_id = $2,
+          name = $3,
+          name_bn = $4,
+          email = $5,
+          role = $6,
+          phone = $7,
+          branch_id = $8,
+          branch_name = $9,
+          specialization = $10,
+          bmdc_reg_no = $11,
+          consultation_fee_bdt = $12,
+          follow_up_fee_bdt = $13,
+          room_number = $14,
+          certifications = $15::jsonb,
+          shift = $16,
+          status = $17,
+          designation = $18,
           updated_at = NOW()
         WHERE id = $1
         RETURNING *
         `,
         [
           id,
+          nextEmployeeId,
           patch.name ?? cur.name,
           patch.nameBn !== undefined ? patch.nameBn || null : cur.nameBn || null,
           patch.email ? patch.email.trim().toLowerCase() : cur.email,

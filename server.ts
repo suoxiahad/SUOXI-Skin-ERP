@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { isDemoRoleSwitcherAllowed, isProductionAuthEnabled } from './server/auth/productionAuth.ts';
 import { getRequestAuthUser } from './server/auth/requestContext.ts';
 import { checkRedisHealth, closeRedis, isRedisConfigured } from './server/cache/redisClient.ts';
-import { assertProductionSecurityOrThrow, maskSecret } from './server/config/securityConfig.ts';
+import { assertProductionSecurityOrThrow, isHostedFallbackWithoutDb, maskSecret } from './server/config/securityConfig.ts';
 import { checkPgHealth, closePgPool, isPostgresConfigured } from './server/db/pgPool.ts';
 import { closeClinicQueue, getQueueStats, startClinicWorker } from './server/queue/jobQueue.ts';
 import {
@@ -27,7 +27,12 @@ import {
 import { createPgCoreRouter } from './server/routes/pgCoreRoutes.ts';
 import { createPgExtendedRouter } from './server/routes/pgExtendedRoutes.ts';
 import { createPgOpsRouter } from './server/routes/pgOpsRoutes.ts';
-import { createPhase4AuthMiddleware, createPhase4PlatformRouter } from './server/routes/phase4PlatformRoutes.ts';
+import { parseCookieHeader } from './server/auth/productionAuth.ts';
+import {
+  createPhase4AuthMiddleware,
+  createPhase4PlatformRouter,
+  PREVIEW_SESSION_COOKIE_NAME,
+} from './server/routes/phase4PlatformRoutes.ts';
 import { getPrivateStorageHealth } from './server/storage/localFileStorage.ts';
 import type {
   User,
@@ -103,10 +108,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+    const requestHost = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+    const requestProto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+    const isSameOrigin = Boolean(requestHost && origin === `${requestProto}://${requestHost}`);
     const isAllowed =
       process.env.NODE_ENV !== 'production'
-        ? allowedOrigins.length === 0 || allowedOrigins.includes(origin)
-        : allowedOrigins.includes(origin);
+        ? allowedOrigins.length === 0 || allowedOrigins.includes(origin) || isSameOrigin
+        : isSameOrigin || allowedOrigins.includes(origin);
     if (isAllowed) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
@@ -161,8 +169,16 @@ const handleHealth = async (_req: Request, res: Response) => {
 app.get('/api/v1/health', handleHealth);
 app.get('/healthz', handleHealth);
 
+// Preview-only session & credential store (STRICTLY inactive when PostgreSQL is configured or NODE_ENV === 'production')
+const previewSessions = new Map<string, User>();
+const previewStaffPasswords = new Map<string, string>();
+
 // Phase 4: Production Auth Middleware & Per-Request Session Context
-app.use(createPhase4AuthMiddleware());
+app.use(
+  createPhase4AuthMiddleware({
+    resolvePreviewUser: (_req, previewSid) => previewSessions.get(previewSid),
+  })
+);
 
 // In-memory CSRF & Idempotency Store
 const validCsrfTokens = new Set<string>();
@@ -248,6 +264,7 @@ const branches: Branch[] = [
 
 let currentUser: User = {
   id: 'usr-101',
+  employeeId: '0002',
   name: 'Dr. Nusrat Jahan',
   nameBn: 'ডাঃ নুসরাত জাহান',
   email: 'nusrat.jahan@suoxiclinic.com',
@@ -2613,6 +2630,7 @@ const auditEvents: AuditEvent[] = [
 const staffUsers: User[] = [
   {
     id: 'usr-100',
+    employeeId: '0001',
     name: 'Kabir Ahmed',
     nameBn: 'কবির আহমেদ',
     email: 'director@suoxiclinic.com',
@@ -2627,6 +2645,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-101',
+    employeeId: '0002',
     name: 'Dr. Nusrat Jahan',
     nameBn: 'ডাঃ নুসরাত জাহান',
     email: 'nusrat.jahan@suoxiclinic.com',
@@ -2648,6 +2667,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-102',
+    employeeId: '0003',
     name: 'Dr. Farhana Khan',
     nameBn: 'ডাঃ ফারহানা খান',
     email: 'farhana.khan@suoxiclinic.com',
@@ -2668,6 +2688,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-108',
+    employeeId: '0004',
     name: 'Dr. Tanvir Ahmed',
     nameBn: 'ডাঃ তানভীর আহমেদ',
     email: 'tanvir.ahmed@suoxiclinic.com',
@@ -2688,6 +2709,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-109',
+    employeeId: '0005',
     name: 'Sabrina Mostafa',
     nameBn: 'সাবরিনা মোস্তফা',
     email: 'sabrina.m@suoxiclinic.com',
@@ -2708,6 +2730,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-105',
+    employeeId: '0006',
     name: 'Rina Begum',
     nameBn: 'রিনা বেগম',
     email: 'therapist.rina@suoxiclinic.com',
@@ -2725,6 +2748,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-110',
+    employeeId: '0007',
     name: 'Nasreen Sultana',
     nameBn: 'নাসরিন সুলতানা',
     email: 'nasreen.sultana@suoxiclinic.com',
@@ -2742,6 +2766,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-111',
+    employeeId: '0008',
     name: 'Tania Akter',
     nameBn: 'তানিয়া আক্তার',
     email: 'tania.therapist@suoxiclinic.com',
@@ -2759,6 +2784,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-103',
+    employeeId: '0009',
     name: 'Fatima Zohra',
     nameBn: 'ফাতিমা জোহরা',
     email: 'reception.dhanmondi@suoxiclinic.com',
@@ -2774,6 +2800,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-112',
+    employeeId: '0010',
     name: 'Mehedi Hasan',
     nameBn: 'মেহেদী হাসান',
     email: 'reception.gulshan@suoxiclinic.com',
@@ -2789,6 +2816,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-106',
+    employeeId: '0011',
     name: 'Shamim Hossain',
     nameBn: 'শামীম হোসেন',
     email: 'accounts@suoxiclinic.com',
@@ -2804,6 +2832,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-107',
+    employeeId: '0012',
     name: 'Sharmin Sultana',
     nameBn: 'শারমিন সুলতানা',
     email: 'inventory@suoxiclinic.com',
@@ -2819,6 +2848,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-104',
+    employeeId: '0013',
     name: 'Tania Khan',
     nameBn: 'তানিয়া খান',
     email: 'callcenter.agent1@suoxiclinic.com',
@@ -2834,6 +2864,7 @@ const staffUsers: User[] = [
   },
   {
     id: 'usr-113',
+    employeeId: '0014',
     name: 'Farzana Yasmin',
     nameBn: 'ফারজানা ইয়াসমিন',
     email: 'admin.dhanmondi@suoxiclinic.com',
@@ -2848,6 +2879,13 @@ const staffUsers: User[] = [
     createdAt: '2025-01-05T10:00:00Z',
   },
 ];
+
+// Register default preview-only passwords (strictly non-production or Cloud Run preview without PostgreSQL)
+if ((process.env.NODE_ENV !== 'production' || isHostedFallbackWithoutDb()) && !isPostgresConfigured()) {
+  for (const staff of staffUsers) {
+    previewStaffPasswords.set(staff.id, '123456');
+  }
+}
 
 const clinicRoles: ClinicRoleDefinition[] = [
   {
@@ -3466,6 +3504,65 @@ function saveIdempotency(key: string | undefined, statusCode: number, body: unkn
 app.use(
   createPhase4PlatformRouter({
     getFallbackUser: () => currentUser,
+    previewAuth:
+      (process.env.NODE_ENV !== 'production' || isHostedFallbackWithoutDb()) && !isPostgresConfigured()
+        ? {
+            authenticate: (identifier: string, password: string) => {
+              const raw = identifier.trim();
+              const upper = raw.toUpperCase();
+              const lower = raw.toLowerCase();
+              const staff = staffUsers.find(
+                (u) =>
+                  (u.employeeId && u.employeeId.toUpperCase() === upper) ||
+                  u.email.toLowerCase() === lower
+              );
+              if (!staff) {
+                return {
+                  statusCode: 401,
+                  errorCode: 'INVALID_CREDENTIALS',
+                  message: 'Invalid Employee ID or password',
+                };
+              }
+              if (staff.status && staff.status !== 'active') {
+                return {
+                  statusCode: 403,
+                  errorCode: 'ACCOUNT_INACTIVE',
+                  message: 'Your staff account is inactive or suspended. Contact the clinic administrator.',
+                };
+              }
+              const expectedPwd = previewStaffPasswords.get(staff.id) ?? '123456';
+              if (password !== expectedPwd) {
+                return {
+                  statusCode: 401,
+                  errorCode: 'INVALID_CREDENTIALS',
+                  message: 'Invalid Employee ID or password',
+                };
+              }
+              return { user: { ...staff } };
+            },
+            getSessionUser: (sessionId: string) => previewSessions.get(sessionId),
+            createSession: (user: User, ipAddress: string, deviceInfo: string) => {
+              const sid = crypto.randomBytes(24).toString('hex');
+              const sessionUser = { ...user, lastLoginAt: new Date().toISOString() };
+              previewSessions.set(sid, sessionUser);
+              currentUser = sessionUser;
+              const matched = staffUsers.find((u) => u.id === user.id);
+              if (matched) {
+                matched.lastLoginAt = sessionUser.lastLoginAt;
+              }
+              logAuditEvent(
+                'USER_LOGIN',
+                'user',
+                user.id,
+                `Preview sign-in by ${user.employeeId || user.email} from ${ipAddress} (${deviceInfo.slice(0, 60)})`
+              );
+              return sid;
+            },
+            revokeSession: (sessionId: string) => {
+              previewSessions.delete(sessionId);
+            },
+          }
+        : undefined,
   })
 );
 
@@ -3473,142 +3570,17 @@ app.use(
 // Endpoints: Authentication & User Roles Switcher (Preview Fallback)
 // -------------------------------------------------------------
 
-app.get('/api/v1/auth/me', (_req, res) => {
-  return sendSuccess(res, { user: currentUser, authMode: 'preview_demo', allowRoleSwitcher: true });
-});
-
-app.post('/api/v1/auth/switch-role', (req, res) => {
-  const schema = z.object({
-    role: z.enum([
-      'super_admin',
-      'admin_manager',
-      'receptionist',
-      'doctor',
-      'therapist',
-      'cashier',
-      'inventory_manager',
-      'call_center',
-      'patient',
-    ]),
-    branchId: z.string().optional(),
-  });
-
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) {
-    return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid role requested', parsed.error.format());
+app.get('/api/v1/auth/me', (req, res) => {
+  if ((process.env.NODE_ENV !== 'production' || isHostedFallbackWithoutDb()) && !isPostgresConfigured()) {
+    const cookies = parseCookieHeader(req.headers.cookie);
+    const sid = cookies[PREVIEW_SESSION_COOKIE_NAME];
+    const previewUser = sid ? previewSessions.get(sid) : undefined;
+    if (!previewUser) {
+      return sendError(res, 401, 'AUTH_REQUIRED', 'Authentication required. Please sign in.');
+    }
+    return sendSuccess(res, { user: previewUser, authMode: 'preview_demo', allowRoleSwitcher: true });
   }
-
-  const role = parsed.data.role;
-  const branchId = parsed.data.branchId || currentUser.branchId;
-  const targetBranch = branches.find((b) => b.id === branchId) || branches[0];
-
-  // Configure profile according to role
-  switch (role) {
-    case 'super_admin':
-      currentUser = {
-        id: 'usr-100',
-        name: 'Kabir Ahmed (Super Admin)',
-        email: 'kabir.ahmed@suoxiclinic.com',
-        role: 'super_admin',
-        phone: '+8801700000001',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-      };
-      break;
-    case 'doctor':
-      currentUser = {
-        id: 'usr-101',
-        name: 'Dr. Nusrat Jahan',
-        nameBn: 'ডাঃ নুসরাত জাহান',
-        email: 'nusrat.jahan@suoxiclinic.com',
-        role: 'doctor',
-        phone: '+8801711223344',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-        specialization: 'MBBS, DDV, Consultant Aesthetic Dermatologist',
-        bmdcRegNo: 'BMDC-A-48921',
-      };
-      break;
-    case 'receptionist':
-      currentUser = {
-        id: 'usr-103',
-        name: 'Fatima Zohra',
-        nameBn: 'ফাতিমা জোহরা',
-        email: 'reception.dhanmondi@suoxiclinic.com',
-        role: 'receptionist',
-        phone: '+8801799887766',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-      };
-      break;
-    case 'call_center':
-      currentUser = {
-        id: 'usr-104',
-        name: 'Tania Khan',
-        nameBn: 'তানিয়া খান',
-        email: 'callcenter.agent1@suoxiclinic.com',
-        role: 'call_center',
-        phone: '+8801833221100',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-      };
-      break;
-    case 'therapist':
-      currentUser = {
-        id: 'usr-105',
-        name: 'Rina Begum',
-        nameBn: 'রিনা বেগম',
-        email: 'therapist.rina@suoxiclinic.com',
-        role: 'therapist',
-        phone: '+8801755443322',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-        specialization: 'Lead Aesthetic & Laser Therapist',
-      };
-      break;
-    case 'cashier':
-      currentUser = {
-        id: 'usr-106',
-        name: 'Shamim Hossain',
-        nameBn: 'শামীম হোসেন',
-        email: 'accounts@suoxiclinic.com',
-        role: 'cashier',
-        phone: '+8801844778899',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-      };
-      break;
-    case 'inventory_manager':
-      currentUser = {
-        id: 'usr-107',
-        name: 'Sharmin Sultana',
-        nameBn: 'শারমিন সুলতানা',
-        email: 'inventory@suoxiclinic.com',
-        role: 'inventory_manager',
-        phone: '+8801966554433',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-      };
-      break;
-    case 'patient':
-      currentUser = {
-        id: 'pt-1',
-        name: 'Taslima Akter (Patient Portal)',
-        nameBn: 'তাসলিমা আক্তার',
-        email: 'taslima.akter@gmail.com',
-        role: 'patient',
-        phone: '+8801712345678',
-        branchId: targetBranch.id,
-        branchName: targetBranch.name,
-      };
-      break;
-    default:
-      currentUser.role = role;
-  }
-
-  logAuditEvent('USER_ROLE_SWITCHED', 'user', currentUser.id, `Active session switched to ${role} in ${targetBranch.name}`);
-
-  return sendSuccess(res, { user: currentUser });
+  return sendSuccess(res, { user: currentUser, authMode: 'preview_demo', allowRoleSwitcher: false });
 });
 
 // Phase 2: Mount PostgreSQL Core Clinical & Financial Router (active when DATABASE_URL is configured)
@@ -3637,9 +3609,9 @@ app.use(
   })
 );
 
-// Production Fail-Closed Barrier: NEVER fall through to in-memory prototype routes in production
+// Production Fail-Closed Barrier: NEVER fall through to in-memory prototype routes in real VPS/PG production
 app.use(['/api', '/portal'], (req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' && !isHostedFallbackWithoutDb()) {
     return sendError(
       res,
       404,
@@ -7049,6 +7021,7 @@ app.get('/api/v1/users', (req, res) => {
     list = list.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
+        (u.employeeId && u.employeeId.toLowerCase().includes(q)) ||
         (u.nameBn && u.nameBn.includes(q)) ||
         u.email.toLowerCase().includes(q) ||
         u.phone.includes(q) ||
@@ -7072,6 +7045,7 @@ app.get('/api/v1/users/:id', (req, res) => {
 // 3. Create user
 app.post('/api/v1/users', (req, res) => {
   const {
+    employeeId: rawEmployeeId,
     name,
     nameBn,
     email,
@@ -7086,16 +7060,29 @@ app.post('/api/v1/users', (req, res) => {
     roomNumber,
     certifications,
     shift,
+    password,
   } = req.body || {};
 
   if (!name || !email || !role || !phone) {
     return sendError(res, 400, 'BAD_REQUEST', 'Name, email, role, and phone are required');
   }
 
+  let employeeId = typeof rawEmployeeId === 'string' ? rawEmployeeId.trim().toUpperCase() : '';
+  if (!employeeId) {
+    let nextNum = staffUsers.length + 1;
+    while (staffUsers.some((u) => u.employeeId?.toUpperCase() === String(nextNum).padStart(4, '0'))) {
+      nextNum += 1;
+    }
+    employeeId = String(nextNum).padStart(4, '0');
+  } else if (staffUsers.some((u) => u.employeeId?.toUpperCase() === employeeId)) {
+    return sendError(res, 409, 'DUPLICATE_EMPLOYEE_ID', `Employee ID '${employeeId}' is already assigned.`);
+  }
+
   const targetBranch = branches.find((b) => b.id === branchId) || branches[0];
 
   const newUser: User = {
     id: `usr-${Date.now().toString().slice(-4)}`,
+    employeeId,
     name,
     nameBn,
     email,
@@ -7116,6 +7103,9 @@ app.post('/api/v1/users', (req, res) => {
   };
 
   staffUsers.push(newUser);
+  if ((process.env.NODE_ENV !== 'production' || isHostedFallbackWithoutDb()) && !isPostgresConfigured()) {
+    previewStaffPasswords.set(newUser.id, typeof password === 'string' && password.length > 0 ? password : '123456');
+  }
 
   // Update role user count
   const roleDef = clinicRoles.find((r) => r.id === role);
@@ -7133,11 +7123,11 @@ app.post('/api/v1/users', (req, res) => {
     ipAddress: '127.0.0.1',
     deviceInfo: 'Clinical CRM Console',
     status: 'success',
-    details: `Created new staff profile for ${newUser.name} with role ${newUser.role}`,
+    details: `Created new staff profile for ${newUser.name} (${employeeId}) with role ${newUser.role}`,
     timestamp: new Date().toISOString(),
   });
 
-  logAuditEvent('USER_CREATED', 'user', newUser.id, `Created staff member ${newUser.name} (${newUser.role}) in ${targetBranch.name}`);
+  logAuditEvent('USER_CREATED', 'user', newUser.id, `Created staff member ${newUser.name} (${employeeId}, ${newUser.role}) in ${targetBranch.name}`);
 
   return sendSuccess(res, newUser, {}, 201);
 });
@@ -7575,11 +7565,20 @@ async function start() {
   });
 
   if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.resolve('.', 'dist')));
-    app.use((req, res, next) => {
-      if (req.method !== 'GET') return next();
-      res.sendFile(path.resolve('.', 'dist', 'index.html'));
-    });
+    const distDir = path.resolve('.', 'dist');
+    if (fs.existsSync(path.join(distDir, 'index.html'))) {
+      app.use(express.static(distDir));
+      app.use((req, res, next) => {
+        if (req.method !== 'GET') return next();
+        res.sendFile(path.join(distDir, 'index.html'));
+      });
+    } else {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    }
   } else {
     const vite = await createViteServer({
       server: { middlewareMode: true },

@@ -40,6 +40,7 @@ import {
   Scale,
   DollarSign,
   ClipboardList,
+  LogOut,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
 import { t } from '../../utils/translations.ts';
@@ -51,6 +52,7 @@ export const Sidebar: React.FC = () => {
     navigate,
     language,
     currentUser,
+    logout,
     setSelectedPatientId,
     setIsQuickBookOpen,
     isAddTreatmentOpen,
@@ -1599,24 +1601,43 @@ export const Sidebar: React.FC = () => {
         </div>
       </nav>
 
-      {/* User Session Footnote */}
+      {/* User Session Footnote + Logout */}
       <div className="p-3 border-t border-slate-100 bg-slate-50/50">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-full bg-slate-200 border border-slate-300 flex items-center justify-center text-xs font-bold text-slate-700 shrink-0">
-            {currentUser?.name.charAt(0) || 'U'}
-          </div>
-          {!isCollapsed && (
-            <div className="flex-1 truncate">
-              <p className="text-xs font-semibold text-slate-800 truncate leading-none">
-                {currentUser?.name}
-              </p>
-              <p className="text-[10px] text-slate-500 capitalize truncate mt-1 flex items-center gap-1">
-                <span>{currentUser?.role.replace('_', ' ')}</span>
-                <span className="text-slate-300">•</span>
-                <span className="text-[#0DA54F] font-medium">{currentUser?.branchName?.split(' ')[0]}</span>
-              </p>
+        <div className={`flex items-center ${isCollapsed ? 'flex-col gap-2' : 'justify-between gap-2'}`}>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-slate-200 border border-slate-300 flex items-center justify-center text-xs font-bold text-slate-700 shrink-0">
+              {currentUser?.name.charAt(0) || 'U'}
             </div>
-          )}
+            {!isCollapsed && (
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-800 truncate leading-none">
+                  {currentUser?.name}
+                </p>
+                <p className="text-[10px] text-slate-500 capitalize truncate mt-1 flex items-center gap-1">
+                  {currentUser?.employeeId && (
+                    <>
+                      <span className="font-mono font-semibold text-slate-700">{currentUser.employeeId}</span>
+                      <span className="text-slate-300">•</span>
+                    </>
+                  )}
+                  <span className="truncate">{currentUser?.role.replace('_', ' ')}</span>
+                </p>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void logout()}
+            title={isBn ? 'লগআউট' : 'Logout'}
+            aria-label={isBn ? 'লগআউট' : 'Logout'}
+            className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold text-slate-600 hover:text-rose-600 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 transition-colors shrink-0 cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
+            {!isCollapsed && (
+              <span className="whitespace-nowrap">{isBn ? 'লগআউট' : 'Logout'}</span>
+            )}
+          </button>
         </div>
       </div>
     </aside>

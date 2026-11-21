@@ -143,12 +143,18 @@ export class FileService {
   private files = new Map<string, FileRecord>();
   private patientFiles = new Map<string, PatientFileRecord>();
   private storage: StorageDriver;
-  private signingSecret: string;
+  private signingSecret: string | null = null;
 
   constructor(storageDriver?: StorageDriver) {
     this.storage = storageDriver || new LocalStorageDriver();
-    const config = getConfig();
-    this.signingSecret = config.JWT_SECRET || 'suoxi_file_signing_secret_key_default';
+  }
+
+  private getSigningSecret(): string {
+    if (!this.signingSecret) {
+      const config = getConfig();
+      this.signingSecret = config.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+    }
+    return this.signingSecret;
   }
 
   setStorageDriver(driver: StorageDriver): void {
@@ -323,7 +329,7 @@ export class FileService {
 
     const b64Payload = Buffer.from(payload).toString('base64url');
     const signature = crypto
-      .createHmac('sha256', this.signingSecret)
+      .createHmac('sha256', this.getSigningSecret())
       .update(b64Payload)
       .digest('hex');
 
@@ -356,7 +362,7 @@ export class FileService {
 
     // Verify HMAC
     const expectedSig = crypto
-      .createHmac('sha256', this.signingSecret)
+      .createHmac('sha256', this.getSigningSecret())
       .update(b64Payload)
       .digest('hex');
 

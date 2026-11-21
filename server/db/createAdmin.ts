@@ -63,6 +63,7 @@ async function run(): Promise<void> {
   }
 
   const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const employeeId = (process.env.ADMIN_EMPLOYEE_ID || '0001').trim().toUpperCase();
   const password = process.env.ADMIN_PASSWORD || '';
   const name = (process.env.ADMIN_NAME || 'SUOXI Super Admin').trim();
   const phone = (process.env.ADMIN_PHONE || '+8801700000000').trim();
@@ -154,29 +155,30 @@ async function run(): Promise<void> {
       await client.query(
         `
         UPDATE users
-        SET password_hash = $2,
+        SET employee_id = COALESCE(NULLIF(employee_id, ''), $2),
+            password_hash = $3,
             role = 'super_admin',
             status = 'active',
             must_change_password = TRUE,
             updated_at = NOW()
         WHERE id = $1
         `,
-        [userId, passwordHash]
+        [userId, employeeId, passwordHash]
       );
     } else {
       userId = `usr-admin-${crypto.randomBytes(4).toString('hex')}`;
       await client.query(
         `
         INSERT INTO users (
-          id, name, email, password_hash, must_change_password, role, phone,
+          id, employee_id, name, email, password_hash, must_change_password, role, phone,
           branch_id, branch_name, status, permissions, designation
         )
         VALUES (
-          $1, $2, $3, $4, TRUE, 'super_admin', $5,
-          $6, 'Dhanmondi Main Center', 'active', '["*"]'::jsonb, 'Managing Director'
+          $1, $2, $3, $4, $5, TRUE, 'super_admin', $6,
+          $7, 'Dhanmondi Main Center', 'active', '["*"]'::jsonb, 'Managing Director'
         )
         `,
-        [userId, name, email, passwordHash, phone, branchId]
+        [userId, employeeId, name, email, passwordHash, phone, branchId]
       );
     }
 
@@ -190,7 +192,9 @@ async function run(): Promise<void> {
     );
   });
 
-  console.log(`[SUOXI Create Admin] Production super_admin ready for ${email} (Argon2id hashed, must_change_password=true).`);
+  console.log(
+    `[SUOXI Create Admin] Production super_admin ready (Employee ID: ${employeeId}, Email: ${email}, Argon2id hashed, must_change_password=true).`
+  );
 }
 
 run()

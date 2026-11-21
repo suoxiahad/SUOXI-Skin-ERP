@@ -224,30 +224,26 @@ export const api = {
     meWithMeta: async (): Promise<{
       user: User;
       authMode?: 'production_session' | 'preview_demo';
-      allowRoleSwitcher?: boolean;
     }> => {
       const res = await request<{
         user: User;
         authMode?: 'production_session' | 'preview_demo';
-        allowRoleSwitcher?: boolean;
       }>('/api/v1/auth/me');
       return res.data;
     },
     login: async (
-      email: string,
+      identifier: string,
       password: string
     ): Promise<{
       user: User;
       mustChangePassword?: boolean;
-      allowRoleSwitcher?: boolean;
     }> => {
       const res = await request<{
         user: User;
         mustChangePassword?: boolean;
-        allowRoleSwitcher?: boolean;
       }>('/api/v1/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ identifier, password }),
       });
       return res.data;
     },
@@ -261,13 +257,6 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ currentPassword, newPassword }),
       });
-    },
-    switchRole: async (role: UserRole, branchId?: string): Promise<User> => {
-      const res = await request<{ user: User }>('/api/v1/auth/switch-role', {
-        method: 'POST',
-        body: JSON.stringify({ role, branchId }),
-      });
-      return res.data.user;
     },
   },
 

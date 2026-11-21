@@ -17,6 +17,7 @@ import argon2 from 'argon2';
 import type { Request, Response } from 'express';
 import type { User, UserRole } from '../../src/types/index.ts';
 import { getRedisClient } from '../cache/redisClient.ts';
+import { isHostedFallbackWithoutDb } from '../config/securityConfig.ts';
 import { isPostgresConfigured, pgQuery } from '../db/pgPool.ts';
 import { extractClientIp, pgLogAuditEvent, pgLogSecurityEvent } from '../repositories/pgHelpers.ts';
 import {
@@ -41,6 +42,7 @@ export interface AuthedRequest extends Request {
 }
 
 export function isProductionAuthEnabled(): boolean {
+  if (isHostedFallbackWithoutDb() && !isPostgresConfigured()) return false;
   if (process.env.NODE_ENV === 'production') return true;
   if (process.env.REQUIRE_AUTH === 'true') return true;
   if (process.env.ENABLE_DEMO_ROLE_SWITCHER === 'true') return false;
@@ -122,6 +124,7 @@ async function getSessionTimeoutSeconds(): Promise<number> {
 function mapPgUserToSessionUser(row: Record<string, unknown>): User {
   return {
     id: String(row.id),
+    employeeId: row.employee_id ? String(row.employee_id) : undefined,
     name: String(row.name),
     nameBn: row.name_bn ? String(row.name_bn) : undefined,
     email: String(row.email),
@@ -153,15 +156,18 @@ async function clearLoginFailures(key: string): Promise<void> {
 }
 
 export async function loginWithPassword(params: {
-  email: string;
+  identifier?: string;
+  email?: string;
   password: string;
   req: Request;
   res: Response;
 }): Promise<AuthenticatedSession> {
-  const email = params.email.trim().toLowerCase();
+  const rawIdentifier = (params.identifier ?? params.email ?? '').trim();
+  const normalizedUpper = rawIdentifier.toUpperCase();
+  const normalizedLower = rawIdentifier.toLowerCase();
   const ipAddress = extractClientIp(params.req.headers, params.req.ip || '127.0.0.1');
   const deviceInfo = String(params.req.headers['user-agent'] || 'Web Browser').slice(0, 180);
-  const rateKey = `${ipAddress}:${email}`;
+  const rateKey = `${ipAddress}:${normalizedUpper}`;
 
   const rate = await checkLoginRateLimit(rateKey);
   if (rate.blocked) {
@@ -174,10 +180,18 @@ export async function loginWithPassword(params: {
     throw err;
   }
 
-  const userRes = await pgQuery('SELECT * FROM users WHERE LOWER(email) = $1 LIMIT 1', [email]);
+  const userRes = await pgQuery(
+    `
+    SELECT * FROM users
+    WHERE (employee_id IS NOT NULL AND UPPER(employee_id) = $1)
+       OR LOWER(email) = $2
+    LIMIT 1
+    `,
+    [normalizedUpper, normalizedLower]
+  );
   if (userRes.rowCount === 0) {
     await recordLoginFailure(rateKey);
-    const err = new Error('Invalid email or password') as Error & { statusCode?: number; code?: string };
+    const err = new Error('Invalid Employee ID or password') as Error & { statusCode?: number; code?: string };
     err.statusCode = 401;
     err.code = 'INVALID_CREDENTIALS';
     throw err;
@@ -211,12 +225,12 @@ export async function loginWithPassword(params: {
     await pgLogSecurityEvent(
       user,
       'LOGIN',
-      `Failed password verification attempt for ${email}`,
+      `Failed password verification attempt for ${user.employeeId || user.email}`,
       'failed',
       ipAddress,
       deviceInfo
     );
-    const err = new Error('Invalid email or password') as Error & { statusCode?: number; code?: string };
+    const err = new Error('Invalid Employee ID or password') as Error & { statusCode?: number; code?: string };
     err.statusCode = 401;
     err.code = 'INVALID_CREDENTIALS';
     throw err;

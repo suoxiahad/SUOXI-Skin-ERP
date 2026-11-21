@@ -81,6 +81,74 @@ samp {
   }
 }
 
+@keyframes suoxiMeshDriftA {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.72;
+  }
+  50% {
+    transform: translate3d(28px, -18px, 0) scale(1.08);
+    opacity: 0.92;
+  }
+}
+
+@keyframes suoxiMeshDriftB {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate3d(-24px, 22px, 0) scale(1.06);
+    opacity: 0.78;
+  }
+}
+
+@keyframes suoxiRingRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes suoxiStaggerIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes suoxiErrorShake {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  20%,
+  60% {
+    transform: translate3d(-6px, 0, 0);
+  }
+  40%,
+  80% {
+    transform: translate3d(6px, 0, 0);
+  }
+}
+
+.font-editorial {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-id {
+  font-family: 'JetBrains Mono', 'Plus Jakarta Sans', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 .animate-suoxi-enter {
   animation: suoxiFadeSlideUp 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -93,10 +161,38 @@ samp {
   animation: suoxiPopIn 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+.animate-suoxi-mesh-a {
+  animation: suoxiMeshDriftA 15s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.animate-suoxi-mesh-b {
+  animation: suoxiMeshDriftB 18s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.animate-suoxi-orbit {
+  animation: suoxiRingRotate 48s linear infinite;
+  will-change: transform;
+}
+
+.animate-suoxi-stagger {
+  animation: suoxiStaggerIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-suoxi-shake {
+  animation: suoxiErrorShake 320ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-suoxi-enter,
   .animate-suoxi-drawer,
-  .animate-suoxi-pop {
+  .animate-suoxi-pop,
+  .animate-suoxi-mesh-a,
+  .animate-suoxi-mesh-b,
+  .animate-suoxi-orbit,
+  .animate-suoxi-stagger,
+  .animate-suoxi-shake {
     animation: none !important;
   }
 }

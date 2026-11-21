@@ -63,10 +63,25 @@ export class IntegrationService {
     this.seedInitialData();
   }
 
+  private ephemeralMasterKey: Buffer | null = null;
+
   // --- AES-256-GCM Cryptographic Engine ---
   private getMasterKey(): Buffer {
     const envKey = (process.env.APP_MASTER_KEY || '').trim();
     if (!envKey && process.env.NODE_ENV === 'production') {
+      const isCloudRun = Boolean(
+        (process.env.K_SERVICE || process.env.K_REVISION || process.env.K_CONFIGURATION || '').trim()
+      );
+      const hasDb = Boolean(
+        (process.env.DATABASE_URL || '').trim() ||
+          (process.env.PGHOST && process.env.PGDATABASE && process.env.PGUSER)
+      );
+      if (isCloudRun && !hasDb && process.env.REQUIRE_AUTH !== 'true') {
+        if (!this.ephemeralMasterKey) {
+          this.ephemeralMasterKey = crypto.randomBytes(32);
+        }
+        return this.ephemeralMasterKey;
+      }
       throw new Error('APP_MASTER_KEY is required in production');
     }
     const keyHex = envKey || DEFAULT_DEV_MASTER_KEY;
