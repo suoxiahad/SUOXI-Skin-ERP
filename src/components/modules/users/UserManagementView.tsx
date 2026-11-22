@@ -42,7 +42,7 @@ import type {
 } from '../../../types/index.ts';
 
 export const UserManagementView: React.FC = () => {
-  const { currentView, navigate, language, addToast } = useApp();
+  const { currentView, navigate, language, addToast, branches, activeBranchId } = useApp();
   const isBn = language === 'bn';
 
   // Active Sub-tab derived from currentView
@@ -265,7 +265,7 @@ export const UserManagementView: React.FC = () => {
     email: '',
     phone: '',
     role: 'doctor' as UserRole,
-    branchId: 'br-dhanmondi',
+    branchId: activeBranchId || branches[0]?.id || '',
     designation: '',
     specialization: '',
     bmdcRegNo: '',
@@ -284,7 +284,7 @@ export const UserManagementView: React.FC = () => {
       email: '',
       phone: '+8801',
       role: 'doctor',
-      branchId: 'br-dhanmondi',
+      branchId: activeBranchId || branches[0]?.id || '',
       designation: '',
       specialization: '',
       bmdcRegNo: '',
@@ -365,7 +365,7 @@ export const UserManagementView: React.FC = () => {
   // Form State for Roster Scheduling
   const [rosterForm, setRosterForm] = useState({
     staffId: '',
-    branchId: 'br-dhanmondi',
+    branchId: activeBranchId || branches[0]?.id || '',
     date: new Date().toISOString().substring(0, 10),
     shift: 'morning' as 'morning' | 'evening' | 'full_day' | 'off',
     roomNumber: 'Treatment Suite 1',
@@ -558,8 +558,10 @@ export const UserManagementView: React.FC = () => {
               <span className="text-xs font-normal text-slate-400 ml-1.5">/ {users.length} registered</span>
             </h3>
             <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span>Dhanmondi, Gulshan & Uttara</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+              <span className="truncate">
+                {branches.filter((b) => b.isActive !== false).map((b) => b.name).join(', ') || 'No active branches'}
+              </span>
             </p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -689,9 +691,11 @@ export const UserManagementView: React.FC = () => {
                 className="text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">{isBn ? 'সব ব্রাঞ্চ' : 'All Branches'}</option>
-                <option value="br-dhanmondi">Dhanmondi Main Center</option>
-                <option value="br-gulshan">Gulshan Aesthetic Lounge</option>
-                <option value="br-uttara">Uttara Skin Care Clinic</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
               </select>
 
               {/* Role Filter */}
@@ -1212,9 +1216,11 @@ export const UserManagementView: React.FC = () => {
                   className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-700"
                 >
                   <option value="all">All Branches</option>
-                  <option value="br-dhanmondi">Dhanmondi</option>
-                  <option value="br-gulshan">Gulshan</option>
-                  <option value="br-uttara">Uttara</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
                 </select>
 
                 <button
@@ -1587,13 +1593,19 @@ export const UserManagementView: React.FC = () => {
                     Base Branch Center *
                   </label>
                   <select
-                    value={formData.branchId}
+                    value={formData.branchId || activeBranchId || branches[0]?.id || ''}
                     onChange={(e) => setFormData({ ...formData, branchId: e.target.value })}
                     className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="br-dhanmondi">Dhanmondi Main Center</option>
-                    <option value="br-gulshan">Gulshan Aesthetic Lounge</option>
-                    <option value="br-uttara">Uttara Skin Care Clinic</option>
+                    {branches.length === 0 ? (
+                      <option value="">No branches configured</option>
+                    ) : (
+                      branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.code})
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
               </div>

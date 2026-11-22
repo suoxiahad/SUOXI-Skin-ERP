@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 import type { User } from '../../src/types/index.ts';
 import { pgQuery, withPgTransaction } from '../db/pgPool.ts';
-import { pgLogAuditEvent, toDateOnly, toIsoString, toNumber } from './pgHelpers.ts';
+import { pgLogAuditEvent, pgRequireBranch, toDateOnly, toIsoString, toNumber } from './pgHelpers.ts';
 import { pgNextSequenceCode } from './pgSecurityStoreRepo.ts';
 
 // ============================================================================
@@ -181,7 +181,8 @@ export async function pgCreatePatientNote(
   ipAddress: string
 ) {
   const id = `pnt-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const branchId = payload.branchId || actor.branchId || 'br-dhanmondi';
+  const branch = await pgRequireBranch(payload.branchId || actor.branchId);
+  const branchId = branch.id;
   const res = await pgQuery(
     `
     INSERT INTO patient_notes (id, patient_id, branch_id, note_type, is_clinical, content, created_by, created_by_name)
@@ -217,6 +218,7 @@ export async function pgCreateTreatmentPlan(
   ipAddress: string
 ) {
   const id = `tpl-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const branch = await pgRequireBranch(payload.branchId || actor.branchId);
   const res = await pgQuery(
     `
     INSERT INTO treatment_plans (
@@ -230,7 +232,7 @@ export async function pgCreateTreatmentPlan(
       id,
       payload.consultationId || null,
       payload.patientId,
-      payload.branchId || actor.branchId || 'br-dhanmondi',
+      branch.id,
       actor.id,
       payload.title,
       JSON.stringify(payload.plannedProcedures || []),
@@ -345,7 +347,8 @@ export async function pgStartTreatmentSession(
   return withPgTransaction(async (client) => {
     const id = `ses-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const sessionCode = await pgNextSequenceCode('SESSION', 'SES-', 6, client);
-    const branchId = payload.branchId || actor.branchId || 'br-dhanmondi';
+    const branch = await pgRequireBranch(payload.branchId || actor.branchId, client);
+    const branchId = branch.id;
 
     const res = await client.query(
       `

@@ -45,7 +45,15 @@ type TimeRange = 'today' | 'month' | 'year' | 'all';
 type InvoiceStatusFilter = 'all' | 'paid' | 'partial' | 'pending' | 'refunded';
 
 export const ExecutiveDashboardView: React.FC = () => {
-  const { navigate, setSelectedPatientId, setIsQuickBookOpen, setIsPatientRegistrationOpen, language } = useApp();
+  const {
+    navigate,
+    setSelectedPatientId,
+    setIsQuickBookOpen,
+    setIsPatientRegistrationOpen,
+    language,
+    branches,
+    activeBranchId,
+  } = useApp();
   const isBn = language === 'bn';
 
   const [mode, setMode] = useState<DashboardMode>('general');
@@ -127,16 +135,19 @@ export const ExecutiveDashboardView: React.FC = () => {
     };
   }, [invoices, patients, timeRange, rangeMultiplier]);
 
+  const activeBranchLabel =
+    branches.find((b) => b.id === activeBranchId)?.name || branches[0]?.name || 'Main';
+
   // Wallets Definition with dynamic values
   const wallets = useMemo(() => [
     {
       id: 'cash-counter',
-      name: 'Cash Counter (Dhanmondi)',
+      name: `Cash Counter (${activeBranchLabel})`,
       subtitle: 'Cash Drawer Desk 1 & 2',
       balance: 111160,
       gradient: 'from-violet-600 via-indigo-600 to-indigo-800',
       badge: 'CASH',
-      accountNumber: 'Terminal #DH-01',
+      accountNumber: 'Terminal #01',
       trend: '+12.5%',
     },
     {

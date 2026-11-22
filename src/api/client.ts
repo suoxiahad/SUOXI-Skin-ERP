@@ -183,8 +183,8 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 }
 
 function normalizeAppointment(raw: any): Appointment {
-  const branchId = raw.branchId || raw.branch_id || 'br-dhanmondi';
-  const branchName = raw.branchName || raw.branch_name || (branchId === 'br-uttara' ? 'Uttara Branch' : 'Dhanmondi Branch');
+  const branchId = raw.branchId || raw.branch_id || '';
+  const branchName = raw.branchName || raw.branch_name || '';
   return {
     id: raw.id || raw.appointment_id || raw.appointment_code || `apt-${Math.random().toString(36).substring(2, 9)}`,
     patientId: raw.patientId || raw.patient_id || '',
@@ -289,8 +289,13 @@ export const api = {
   },
 
   branches: {
-    list: async (): Promise<Branch[]> => {
-      const res = await request<Branch[]>('/api/v1/branches');
+    list: async (activeOnly = false): Promise<Branch[]> => {
+      const url = activeOnly ? '/api/v1/branches?activeOnly=true' : '/api/v1/branches';
+      const res = await request<Branch[]>(url);
+      return res.data;
+    },
+    getById: async (id: string): Promise<Branch> => {
+      const res = await request<Branch>(`/api/v1/branches/${encodeURIComponent(id)}`);
       return res.data;
     },
     create: async (data: Partial<Branch>): Promise<Branch> => {
@@ -301,14 +306,33 @@ export const api = {
       return res.data;
     },
     update: async (id: string, data: Partial<Branch>): Promise<Branch> => {
-      const res = await request<Branch>(`/api/v1/branches/${id}`, {
-        method: 'PUT',
+      const res = await request<Branch>(`/api/v1/branches/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
         body: JSON.stringify(data),
       });
       return res.data;
     },
+    activate: async (id: string): Promise<Branch> => {
+      const res = await request<Branch>(`/api/v1/branches/${encodeURIComponent(id)}/activate`, {
+        method: 'POST',
+      });
+      return res.data;
+    },
+    deactivate: async (id: string): Promise<Branch> => {
+      const res = await request<Branch>(`/api/v1/branches/${encodeURIComponent(id)}/deactivate`, {
+        method: 'POST',
+      });
+      return res.data;
+    },
+    setStatus: async (id: string, isActive: boolean): Promise<Branch> => {
+      const res = await request<Branch>(`/api/v1/branches/${encodeURIComponent(id)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive }),
+      });
+      return res.data;
+    },
     toggleStatus: async (id: string): Promise<Branch> => {
-      const res = await request<Branch>(`/api/v1/branches/${id}/toggle-status`, {
+      const res = await request<Branch>(`/api/v1/branches/${encodeURIComponent(id)}/toggle-status`, {
         method: 'POST',
       });
       return res.data;
@@ -414,8 +438,8 @@ export const api = {
         patient_name: data.patientName || null,
         patient_mobile: data.patientPhone || null,
         patient_code: data.patientCode || null,
-        provider_id: data.doctorId || 'usr-101',
-        branch_id: data.branchId || 'br-dhanmondi',
+        provider_id: data.doctorId || 'usr-duty',
+        ...(data.branchId ? { branch_id: data.branchId } : {}),
         disease_name: data.diseaseName || null,
         booking_method: data.bookingMethod || null,
         service_name: data.serviceName || (data.diseaseName ? `Consultation: ${data.diseaseName}` : 'General Consultation'),

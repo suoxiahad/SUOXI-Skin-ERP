@@ -56,7 +56,7 @@ interface ProductReportRow {
 }
 
 export const SalesReportView: React.FC = () => {
-  const { addToast, language, navigate } = useApp();
+  const { addToast, language, navigate, branches } = useApp();
   const isBn = language === 'bn';
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('summary');
@@ -696,9 +696,11 @@ export const SalesReportView: React.FC = () => {
                 className="text-xs rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 cursor-pointer"
               >
                 <option value="all">{isBn ? 'সকল শাখা (All Branches)' : 'All Branches'}</option>
-                <option value="br-dhanmondi">Dhanmondi Main Center</option>
-                <option value="br-gulshan">Gulshan Aesthetic Lounge</option>
-                <option value="br-uttara">Uttara Skin Care Clinic</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
               </select>
             </div>
 

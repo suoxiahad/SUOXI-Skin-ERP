@@ -45,7 +45,7 @@ interface CartItem {
 }
 
 export const POSBillingCounterView: React.FC = () => {
-  const { language, addToast, currentUser, navigate } = useApp();
+  const { language, addToast, currentUser, navigate, branches, activeBranchId } = useApp();
   const isBn = language === 'bn';
 
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -492,7 +492,11 @@ export const POSBillingCounterView: React.FC = () => {
                       <span className="capitalize">{selectedPatient.gender || 'Female'}</span>
                       {selectedPatient.age && <span>• {selectedPatient.age} yrs</span>}
                       <span>•</span>
-                      <span className="text-slate-500 text-[11px]">Dhanmondi Main Center</span>
+                      <span className="text-slate-500 text-[11px]">
+                        {branches.find((b) => b.id === (selectedPatient.branchId || activeBranchId))?.name ||
+                          currentUser?.branchName ||
+                          'Clinic Branch'}
+                      </span>
                     </div>
                   </div>
                 </div>

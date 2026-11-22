@@ -70,6 +70,78 @@ export function generateCode(prefix: string): string {
   return `${prefix}-${year}-${rand}${suffix}`;
 }
 
+export interface ResolvedBranchRef {
+  id: string;
+  name: string;
+  code: string;
+}
+
+export async function pgResolveBranch(
+  preferredBranchId?: string | null,
+  client?: PoolClient
+): Promise<ResolvedBranchRef | null> {
+  const exec = <T extends Record<string, unknown>>(sql: string, params: unknown[]) =>
+    client ? client.query<T>(sql, params) : pgQuery<T>(sql, params);
+
+  const trimmed = preferredBranchId?.trim();
+  if (trimmed) {
+    const exact = await exec<{ id: string; name: string; code: string }>(
+      'SELECT id, name, code FROM branches WHERE id = $1 LIMIT 1',
+      [trimmed]
+    );
+    if (exact.rows[0]) {
+      return {
+        id: String(exact.rows[0].id),
+        name: String(exact.rows[0].name),
+        code: String(exact.rows[0].code),
+      };
+    }
+  }
+
+  const active = await exec<{ id: string; name: string; code: string }>(
+    'SELECT id, name, code FROM branches WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1',
+    []
+  );
+  if (active.rows[0]) {
+    return {
+      id: String(active.rows[0].id),
+      name: String(active.rows[0].name),
+      code: String(active.rows[0].code),
+    };
+  }
+
+  const anyRow = await exec<{ id: string; name: string; code: string }>(
+    'SELECT id, name, code FROM branches ORDER BY created_at ASC LIMIT 1',
+    []
+  );
+  if (anyRow.rows[0]) {
+    return {
+      id: String(anyRow.rows[0].id),
+      name: String(anyRow.rows[0].name),
+      code: String(anyRow.rows[0].code),
+    };
+  }
+
+  return null;
+}
+
+export async function pgRequireBranch(
+  preferredBranchId?: string | null,
+  client?: PoolClient
+): Promise<ResolvedBranchRef> {
+  const branch = await pgResolveBranch(preferredBranchId, client);
+  if (!branch) {
+    const err = new Error('No clinic branch is configured in PostgreSQL. Create a branch first.') as Error & {
+      statusCode?: number;
+      code?: string;
+    };
+    err.statusCode = 400;
+    err.code = 'NO_BRANCH_CONFIGURED';
+    throw err;
+  }
+  return branch;
+}
+
 export async function pgLogAuditEvent(
   actor: Pick<User, 'id' | 'name' | 'role' | 'branchId'>,
   action: string,
@@ -97,7 +169,7 @@ export async function pgLogAuditEvent(
     resourceId,
     details,
     ipAddress,
-    actor.branchId || 'br-dhanmondi',
+    actor.branchId || '',
   ];
   if (client) {
     await client.query(sql, params);

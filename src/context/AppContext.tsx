@@ -29,6 +29,7 @@ interface AppContextType {
   branches: Branch[];
   activeBranchId: string;
   setActiveBranchId: (id: string) => void;
+  refreshBranches: () => Promise<void>;
   language: Language;
   setLanguage: (lang: Language) => void;
   toasts: ToastMessage[];
@@ -367,7 +368,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [authRequired, setAuthRequired] = useState<boolean>(false);
   const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [activeBranchId, setActiveBranchId] = useState<string>('br-dhanmondi');
+  const [activeBranchId, setActiveBranchId] = useState<string>('');
   const [language, setLanguage] = useState<Language>('en');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isQuickBookOpen, setIsQuickBookOpen] = useState(false);
@@ -494,14 +495,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const syncBranchesSelection = (branchList: Branch[], preferredBranchId?: string) => {
+    setBranches(branchList);
+    setActiveBranchId((currentId) => {
+      if (currentId && branchList.some((b) => b.id === currentId)) {
+        return currentId;
+      }
+      if (preferredBranchId && branchList.some((b) => b.id === preferredBranchId)) {
+        return preferredBranchId;
+      }
+      const firstActive = branchList.find((b) => b.isActive !== false);
+      return firstActive?.id || branchList[0]?.id || preferredBranchId || '';
+    });
+  };
+
+  const refreshBranches = async () => {
+    const branchList = await api.branches.list();
+    syncBranchesSelection(branchList, currentUser?.branchId);
+  };
+
   const loadAuthenticatedContext = async () => {
     const [mePayload, branchList] = await Promise.all([api.auth.meWithMeta(), api.branches.list()]);
     setCurrentUser(mePayload.user);
     setAuthRequired(false);
-    setBranches(branchList);
-    if (mePayload.user.branchId) {
-      setActiveBranchId(mePayload.user.branchId);
-    }
+    syncBranchesSelection(branchList, mePayload.user.branchId);
   };
 
   // Initialize initial user and branches
@@ -529,12 +546,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setAuthRequired(needsPwdReset);
     try {
       const branchList = await api.branches.list();
-      setBranches(branchList);
+      syncBranchesSelection(branchList, result.user.branchId);
     } catch {
-      // non-fatal
-    }
-    if (result.user.branchId) {
-      setActiveBranchId(result.user.branchId);
+      if (result.user.branchId) {
+        setActiveBranchId(result.user.branchId);
+      }
     }
     return { mustChangePassword: needsPwdReset };
   };
@@ -551,6 +567,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setCurrentUser(null);
       setMustChangePassword(false);
       setAuthRequired(true);
+      setBranches([]);
+      setActiveBranchId('');
     }
   };
 
@@ -595,6 +613,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         branches,
         activeBranchId,
         setActiveBranchId,
+        refreshBranches,
         language,
         setLanguage,
         toasts,

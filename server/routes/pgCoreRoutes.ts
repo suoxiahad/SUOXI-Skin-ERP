@@ -117,12 +117,23 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
   // ---------------------------------------------------------------------------
   // 1. Branches
   // ---------------------------------------------------------------------------
-  router.get('/api/v1/branches', async (_req, res) => {
+  router.get('/api/v1/branches', async (req, res) => {
     try {
-      const list = await pgOrgRepo.listBranches();
+      const activeOnly = req.query.activeOnly === 'true' || req.query.status === 'active';
+      const list = await pgOrgRepo.listBranches({ activeOnly });
       return sendPgSuccess(res, list, { total: list.length });
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to load branches');
+    }
+  });
+
+  router.get('/api/v1/branches/:id', async (req, res) => {
+    try {
+      const branch = await pgOrgRepo.getBranchById(String(req.params.id));
+      if (!branch) return sendPgError(res, 404, 'NOT_FOUND', 'Branch not found');
+      return sendPgSuccess(res, branch);
+    } catch (err) {
+      return handlePgRouteError(res, err, 'Failed to load branch');
     }
   });
 
@@ -130,15 +141,36 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
   const billingRoles = requireRoles(['super_admin', 'admin_manager', 'cashier', 'receptionist'], deps.getCurrentUser);
   const clinicalRoles = requireRoles(['super_admin', 'admin_manager', 'doctor', 'therapist'], deps.getCurrentUser);
 
+  const createBranchSchema = z.object({
+    id: z.string().trim().min(2).max(80).optional(),
+    organizationId: z.string().trim().optional(),
+    name: z.string().trim().min(2, 'Branch name is required'),
+    nameBn: z.string().trim().optional(),
+    code: z.string().trim().min(2, 'Branch code is required').max(20),
+    address: z.string().trim().optional(),
+    city: z.string().trim().optional(),
+    phone: z.string().trim().optional(),
+    email: z.string().trim().email('Invalid branch email').optional().or(z.literal('')).nullable(),
+    managerName: z.string().trim().optional().nullable(),
+    managerPhone: z.string().trim().optional().nullable(),
+    operatingHours: z.string().trim().optional().nullable(),
+    isActive: z.boolean().optional(),
+  });
+
   router.post('/api/v1/branches', adminOnly, async (req, res) => {
     try {
-      const { name, nameBn, code, address, city, phone, email, managerName, managerPhone, operatingHours } =
-        req.body || {};
-      if (!name || !code || !phone) {
-        return sendPgError(res, 400, 'BAD_REQUEST', 'Branch name, code, and phone are required');
+      const parsed = createBranchSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        return sendPgError(
+          res,
+          400,
+          'BAD_REQUEST',
+          parsed.error.issues[0]?.message || 'Branch name and code are required',
+          parsed.error.format()
+        );
       }
       const created = await pgOrgRepo.createBranch(
-        { name, nameBn, code, address, city, phone, email, managerName, managerPhone, operatingHours },
+        parsed.data,
         deps.getCurrentUser(),
         extractClientIp(req.headers)
       );
@@ -148,7 +180,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     }
   });
 
-  router.put('/api/v1/branches/:id', adminOnly, async (req, res) => {
+  const handleUpdateBranch = async (req: Request, res: Response) => {
     try {
       const updated = await pgOrgRepo.updateBranch(
         String(req.params.id),
@@ -161,7 +193,10 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to update branch');
     }
-  });
+  };
+
+  router.put('/api/v1/branches/:id', adminOnly, handleUpdateBranch);
+  router.patch('/api/v1/branches/:id', adminOnly, handleUpdateBranch);
 
   router.post('/api/v1/branches/:id/toggle-status', adminOnly, async (req, res) => {
     try {
@@ -174,6 +209,54 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
       return sendPgSuccess(res, updated);
     } catch (err) {
       return handlePgRouteError(res, err, 'Failed to toggle branch status');
+    }
+  });
+
+  router.post('/api/v1/branches/:id/activate', adminOnly, async (req, res) => {
+    try {
+      const updated = await pgOrgRepo.setBranchStatus(
+        String(req.params.id),
+        true,
+        deps.getCurrentUser(),
+        extractClientIp(req.headers)
+      );
+      if (!updated) return sendPgError(res, 404, 'NOT_FOUND', 'Branch not found');
+      return sendPgSuccess(res, updated);
+    } catch (err) {
+      return handlePgRouteError(res, err, 'Failed to activate branch');
+    }
+  });
+
+  router.post('/api/v1/branches/:id/deactivate', adminOnly, async (req, res) => {
+    try {
+      const updated = await pgOrgRepo.setBranchStatus(
+        String(req.params.id),
+        false,
+        deps.getCurrentUser(),
+        extractClientIp(req.headers)
+      );
+      if (!updated) return sendPgError(res, 404, 'NOT_FOUND', 'Branch not found');
+      return sendPgSuccess(res, updated);
+    } catch (err) {
+      return handlePgRouteError(res, err, 'Failed to deactivate branch');
+    }
+  });
+
+  router.patch('/api/v1/branches/:id/status', adminOnly, async (req, res) => {
+    try {
+      if (typeof req.body?.isActive !== 'boolean') {
+        return sendPgError(res, 400, 'BAD_REQUEST', 'isActive boolean is required');
+      }
+      const updated = await pgOrgRepo.setBranchStatus(
+        String(req.params.id),
+        req.body.isActive,
+        deps.getCurrentUser(),
+        extractClientIp(req.headers)
+      );
+      if (!updated) return sendPgError(res, 404, 'NOT_FOUND', 'Branch not found');
+      return sendPgSuccess(res, updated);
+    } catch (err) {
+      return handlePgRouteError(res, err, 'Failed to update branch status');
     }
   });
 
@@ -397,7 +480,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
         bloodGroup: z.string().optional(),
         address: z.string().optional(),
         city: z.string().default('Dhaka'),
-        branchId: z.string().default(actor.branchId || 'br-dhanmondi'),
+        branchId: z.string().optional(),
         allergies: z.array(z.string()).optional(),
         medicalHistory: z.string().optional(),
         skinType: z.enum(['normal', 'dry', 'oily', 'combination', 'sensitive']).optional(),
@@ -406,11 +489,12 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
       if (!parsed.success) {
         return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid patient data', parsed.error.format());
       }
-      if (!(await canUserAccessBranch(actor, parsed.data.branchId))) {
+      const targetBranchId = parsed.data.branchId || actor.branchId;
+      if (targetBranchId && !(await canUserAccessBranch(actor, targetBranchId))) {
         return sendPgError(res, 403, 'FORBIDDEN', 'Cannot create patient in unauthorized branch');
       }
       const created = await pgPatientClinicalRepo.createPatient(
-        parsed.data,
+        { ...parsed.data, branchId: targetBranchId },
         actor,
         extractClientIp(req.headers)
       );
@@ -954,7 +1038,7 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
       const actor = deps.getCurrentUser();
       const schema = z.object({
         patientId: z.string(),
-        branchId: z.string().default(actor.branchId || 'br-dhanmondi'),
+        branchId: z.string().optional(),
         items: z
           .array(
             z.object({
@@ -972,11 +1056,12 @@ export function createPgCoreRouter(deps: PgCoreRouterDeps): express.Router {
       if (!parsed.success) {
         return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid invoice items', parsed.error.format());
       }
-      if (!(await canUserAccessBranch(actor, parsed.data.branchId))) {
+      const targetBranchId = parsed.data.branchId || actor.branchId;
+      if (targetBranchId && !(await canUserAccessBranch(actor, targetBranchId))) {
         return sendPgError(res, 403, 'FORBIDDEN', 'Cannot issue invoice in unauthorized branch');
       }
       const created = await pgBillingPackageRepo.createInvoice(
-        parsed.data,
+        { ...parsed.data, branchId: targetBranchId },
         actor,
         extractClientIp(req.headers)
       );

@@ -51,7 +51,7 @@ export const AppointmentList: React.FC = () => {
   // Filters
   const [dateFilter, setDateFilter] = useState<'today' | 'tomorrow' | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [branchFilter, setBranchFilter] = useState<string>(activeBranchId);
+  const [branchFilter, setBranchFilter] = useState<string>(activeBranchId || 'all');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Cancellation modal
@@ -129,7 +129,7 @@ export const AppointmentList: React.FC = () => {
               phone: newApt.patientPhone || '',
               age: newApt.patientAge || 28,
               gender: newApt.patientGender || 'female',
-              address: newApt.patientAddress || 'Dhanmondi, Dhaka',
+              address: newApt.patientAddress || '',
               bloodGroup: newApt.patientBloodGroup || 'B+',
               patientIdCode: (newApt as any).patientCode || 'SX-2026',
             } as any,
@@ -473,7 +473,7 @@ export const AppointmentList: React.FC = () => {
                   const patientPhone = apt.patientPhone || pt?.phone || (apt as any).patient_mobile || '—';
                   const age = apt.patientAge || pt?.age || 28;
                   const gender = apt.patientGender || pt?.gender || 'female';
-                  const address = apt.patientAddress || pt?.address || pt?.city || 'Dhanmondi, Dhaka';
+                  const address = apt.patientAddress || pt?.address || pt?.city || '—';
                   const bloodGroup = apt.patientBloodGroup || pt?.bloodGroup || 'B+';
 
                   // Resolve appointment attributes
@@ -485,7 +485,8 @@ export const AppointmentList: React.FC = () => {
 
                   const doctorName = apt.doctorName || (apt as any).provider_name || 'Dr. Nusrat Jahan';
                   const bookingMethod = apt.bookingMethod || (apt as any).call_reference || 'Phone GP';
-                  const branchDisplay = apt.branchName || (apt.branchId === 'br-uttara' ? 'Uttara Branch' : 'Dhanmondi Main Center');
+                  const branchDisplay =
+                    apt.branchName || branches.find((b) => b.id === apt.branchId)?.name || apt.branchId || '—';
                   const aptTime = apt.appointmentTime || (apt as any).start_time || '';
                   const aptDate = apt.appointmentDate || (apt as any).appointment_date || '';
                   const note = apt.notes || '—';

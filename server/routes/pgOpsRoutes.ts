@@ -26,6 +26,7 @@ import { isPostgresConfigured } from '../db/pgPool.ts';
 import { pgCallCenterReferralsRepo } from '../repositories/pgCallCenterReferralsRepo.ts';
 import {
   extractClientIp,
+  pgRequireBranch,
   sendPgError,
   sendPgSuccess,
 } from '../repositories/pgHelpers.ts';
@@ -174,21 +175,26 @@ export function createPgOpsRouter(deps: PgOpsRouterDeps): express.Router {
       sku: z.string().optional(),
       description: z.string().optional(),
       usageProtocol: z.string().optional(),
-      branchId: z.string().default(actor.branchId || 'br-dhanmondi'),
-      branchName: z.string().default(actor.branchName || 'Dhanmondi Main Center'),
+      branchId: z.string().optional(),
+      branchName: z.string().optional(),
     });
 
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
       return sendPgError(res, 400, 'VALIDATION_ERROR', 'Invalid product data', parsed.error.format());
     }
-    if (!(await canUserAccessBranch(actor, parsed.data.branchId))) {
-      return sendPgError(res, 403, 'FORBIDDEN', 'Cannot create inventory item in unauthorized branch');
-    }
 
     try {
+      const branch = await pgRequireBranch(parsed.data.branchId || actor.branchId);
+      if (!(await canUserAccessBranch(actor, branch.id))) {
+        return sendPgError(res, 403, 'FORBIDDEN', 'Cannot create inventory item in unauthorized branch');
+      }
       const created = await pgInventoryRepo.createInventoryItem(
-        parsed.data,
+        {
+          ...parsed.data,
+          branchId: branch.id,
+          branchName: branch.name,
+        },
         actor,
         extractClientIp(req.headers, req.ip)
       );

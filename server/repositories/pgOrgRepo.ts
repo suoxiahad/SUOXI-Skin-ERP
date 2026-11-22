@@ -14,23 +14,32 @@ import type {
   UserSecurityLog,
 } from '../../src/types/index.ts';
 import { pgQuery, withPgTransaction } from '../db/pgPool.ts';
-import { pgLogAuditEvent, pgLogSecurityEvent, toDateOnly, toIsoString, toNumber } from './pgHelpers.ts';
+import {
+  pgLogAuditEvent,
+  pgLogSecurityEvent,
+  pgRequireBranch,
+  toDateOnly,
+  toIsoString,
+  toNumber,
+} from './pgHelpers.ts';
 
 function mapBranchRow(row: Record<string, unknown>): Branch {
   return {
     id: String(row.id),
+    organizationId: row.organization_id ? String(row.organization_id) : undefined,
     name: String(row.name),
-    nameBn: String(row.name_bn || row.name),
+    nameBn: String(row.name_bn ?? ''),
     code: String(row.code),
-    address: String(row.address || ''),
-    city: String(row.city || 'Dhaka'),
-    phone: String(row.phone || ''),
+    address: String(row.address ?? ''),
+    city: String(row.city ?? ''),
+    phone: String(row.phone ?? ''),
     email: row.email ? String(row.email) : undefined,
     managerName: row.manager_name ? String(row.manager_name) : undefined,
     managerPhone: row.manager_phone ? String(row.manager_phone) : undefined,
     operatingHours: row.operating_hours ? String(row.operating_hours) : undefined,
     isActive: row.is_active !== false,
     createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
   };
 }
 
@@ -72,62 +81,92 @@ export const pgOrgRepo = {
   // ---------------------------------------------------------------------------
   // Branches
   // ---------------------------------------------------------------------------
-  async listBranches(): Promise<Branch[]> {
-    const res = await pgQuery('SELECT * FROM branches ORDER BY created_at ASC');
+  async listBranches(options?: { activeOnly?: boolean }): Promise<Branch[]> {
+    const res = options?.activeOnly
+      ? await pgQuery('SELECT * FROM branches WHERE is_active = TRUE ORDER BY created_at ASC')
+      : await pgQuery('SELECT * FROM branches ORDER BY created_at ASC');
     return res.rows.map(mapBranchRow);
+  },
+
+  async getBranchById(id: string): Promise<Branch | null> {
+    const res = await pgQuery('SELECT * FROM branches WHERE id = $1 LIMIT 1', [id]);
+    return res.rows[0] ? mapBranchRow(res.rows[0]) : null;
   },
 
   async createBranch(
     input: {
+      id?: string;
+      organizationId?: string;
       name: string;
       nameBn?: string;
       code: string;
       address?: string;
       city?: string;
-      phone: string;
-      email?: string;
-      managerName?: string;
-      managerPhone?: string;
-      operatingHours?: string;
+      phone?: string;
+      email?: string | null;
+      managerName?: string | null;
+      managerPhone?: string | null;
+      operatingHours?: string | null;
+      isActive?: boolean;
     },
     actor: User,
     ipAddress: string
   ): Promise<Branch> {
     const codeUpper = input.code.trim().toUpperCase();
-    const id = `br-${codeUpper.toLowerCase()}`;
+    const trimmedName = input.name.trim();
+    const rawSlug = codeUpper.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const id =
+      input.id && input.id.trim()
+        ? input.id.trim()
+        : `br-${rawSlug || crypto.randomBytes(3).toString('hex')}`;
+
     return withPgTransaction(async (client) => {
-      const existing = await client.query('SELECT id FROM branches WHERE UPPER(code) = $1', [codeUpper]);
+      const existing = await client.query(
+        'SELECT id, code FROM branches WHERE id = $1 OR UPPER(code) = $2 LIMIT 1',
+        [id, codeUpper]
+      );
       if (existing.rows.length > 0) {
-        const err = new Error('A branch with this code already exists') as Error & {
-          statusCode?: number;
-          code?: string;
-        };
-        err.statusCode = 400;
-        err.code = 'DUPLICATE_CODE';
+        const dupId = String(existing.rows[0].id) === id;
+        const err = new Error(
+          dupId ? 'A branch with this ID already exists' : 'A branch with this code already exists'
+        ) as Error & { statusCode?: number; code?: string };
+        err.statusCode = 409;
+        err.code = dupId ? 'DUPLICATE_BRANCH_ID' : 'DUPLICATE_CODE';
         throw err;
+      }
+
+      let orgId: string | null = input.organizationId?.trim() || null;
+      if (orgId) {
+        const orgRes = await client.query('SELECT id FROM organizations WHERE id = $1 LIMIT 1', [orgId]);
+        if (orgRes.rows.length === 0) orgId = null;
+      } else {
+        const orgRes = await client.query('SELECT id FROM organizations ORDER BY created_at ASC LIMIT 1');
+        orgId = orgRes.rows[0] ? String(orgRes.rows[0].id) : null;
       }
 
       const res = await client.query(
         `
         INSERT INTO branches (
-          id, code, name, name_bn, address, city, phone, email,
+          id, organization_id, code, name, name_bn, address, city, phone, email,
           manager_name, manager_phone, operating_hours, is_active, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
         RETURNING *
         `,
         [
           id,
+          orgId,
           codeUpper,
-          input.name,
-          input.nameBn || input.name,
-          input.address || '',
-          input.city || 'Dhaka',
-          input.phone,
-          input.email || null,
-          input.managerName || null,
-          input.managerPhone || null,
-          input.operatingHours || '09:00 AM - 08:00 PM (Sat - Thu)',
+          trimmedName,
+          input.nameBn?.trim() ?? '',
+          input.address?.trim() ?? '',
+          input.city?.trim() ?? '',
+          input.phone?.trim() ?? '',
+          input.email?.trim() || null,
+          input.managerName?.trim() || null,
+          input.managerPhone?.trim() || null,
+          input.operatingHours?.trim() || null,
+          input.isActive !== false,
         ]
       );
       const branch = mapBranchRow(res.rows[0]);
@@ -155,6 +194,37 @@ export const pgOrgRepo = {
       if (currentRes.rows.length === 0) return null;
       const cur = mapBranchRow(currentRes.rows[0]);
 
+      const nextCode = patch.code !== undefined ? patch.code.trim().toUpperCase() : cur.code;
+      if (!nextCode) {
+        const err = new Error('Branch code cannot be empty') as Error & { statusCode?: number; code?: string };
+        err.statusCode = 400;
+        err.code = 'INVALID_BRANCH_CODE';
+        throw err;
+      }
+      if (nextCode !== cur.code) {
+        const dup = await client.query(
+          'SELECT id FROM branches WHERE UPPER(code) = $1 AND id <> $2 LIMIT 1',
+          [nextCode, id]
+        );
+        if (dup.rows.length > 0) {
+          const err = new Error('A branch with this code already exists') as Error & {
+            statusCode?: number;
+            code?: string;
+          };
+          err.statusCode = 409;
+          err.code = 'DUPLICATE_CODE';
+          throw err;
+        }
+      }
+
+      const nextName = patch.name !== undefined ? patch.name.trim() : cur.name;
+      if (!nextName) {
+        const err = new Error('Branch name cannot be empty') as Error & { statusCode?: number; code?: string };
+        err.statusCode = 400;
+        err.code = 'INVALID_BRANCH_NAME';
+        throw err;
+      }
+
       const res = await client.query(
         `
         UPDATE branches SET
@@ -175,20 +245,26 @@ export const pgOrgRepo = {
         `,
         [
           id,
-          patch.name ?? cur.name,
-          patch.nameBn ?? cur.nameBn,
-          patch.code ? patch.code.toUpperCase() : cur.code,
-          patch.address ?? cur.address,
-          patch.city ?? cur.city,
-          patch.phone ?? cur.phone,
-          patch.email ?? cur.email ?? null,
-          patch.managerName ?? cur.managerName ?? null,
-          patch.managerPhone ?? cur.managerPhone ?? null,
-          patch.operatingHours ?? cur.operatingHours ?? null,
-          patch.isActive !== undefined ? patch.isActive : cur.isActive !== false,
+          nextName,
+          patch.nameBn !== undefined ? patch.nameBn.trim() : cur.nameBn,
+          nextCode,
+          patch.address !== undefined ? patch.address.trim() : cur.address,
+          patch.city !== undefined ? patch.city.trim() : cur.city,
+          patch.phone !== undefined ? patch.phone.trim() : cur.phone,
+          patch.email !== undefined ? patch.email?.trim() || null : cur.email ?? null,
+          patch.managerName !== undefined ? patch.managerName?.trim() || null : cur.managerName ?? null,
+          patch.managerPhone !== undefined ? patch.managerPhone?.trim() || null : cur.managerPhone ?? null,
+          patch.operatingHours !== undefined ? patch.operatingHours?.trim() || null : cur.operatingHours ?? null,
+          patch.isActive !== undefined ? Boolean(patch.isActive) : cur.isActive !== false,
         ]
       );
       const updated = mapBranchRow(res.rows[0]);
+
+      if (updated.name !== cur.name) {
+        await client.query('UPDATE users SET branch_name = $2 WHERE branch_id = $1', [id, updated.name]);
+        await client.query('UPDATE staff_duty_roster SET branch_name = $2 WHERE branch_id = $1', [id, updated.name]);
+      }
+
       await pgLogAuditEvent(
         actor,
         'BRANCH_UPDATED',
@@ -199,6 +275,37 @@ export const pgOrgRepo = {
         client
       );
       return updated;
+    });
+  },
+
+  async setBranchStatus(
+    id: string,
+    isActive: boolean,
+    actor: User,
+    ipAddress: string
+  ): Promise<Branch | null> {
+    return withPgTransaction(async (client) => {
+      const res = await client.query(
+        `
+        UPDATE branches
+        SET is_active = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [id, isActive]
+      );
+      if (res.rows.length === 0) return null;
+      const branch = mapBranchRow(res.rows[0]);
+      await pgLogAuditEvent(
+        actor,
+        isActive ? 'BRANCH_ACTIVATED' : 'BRANCH_DEACTIVATED',
+        'branch',
+        branch.id,
+        `Branch ${branch.name} status set to ${branch.isActive ? 'ACTIVE' : 'INACTIVE'}`,
+        ipAddress,
+        client
+      );
+      return branch;
     });
   },
 
@@ -276,10 +383,7 @@ export const pgOrgRepo = {
     ipAddress: string
   ): Promise<User> {
     return withPgTransaction(async (client) => {
-      const brRes = input.branchId
-        ? await client.query('SELECT id, name FROM branches WHERE id = $1', [input.branchId])
-        : await client.query('SELECT id, name FROM branches ORDER BY created_at ASC LIMIT 1');
-      const branch = brRes.rows[0] || { id: 'br-dhanmondi', name: 'Dhanmondi Main Center' };
+      const branch = await pgRequireBranch(input.branchId || actor.branchId, client);
 
       const id = `usr-${Date.now().toString().slice(-6)}-${crypto.randomBytes(2).toString('hex')}`;
       const rawPassword = input.password || `Suoxi@${crypto.randomInt(1000, 9999)}`;
@@ -346,6 +450,14 @@ export const pgOrgRepo = {
       );
 
       const created = mapUserRow(res.rows[0]);
+      await client.query(
+        `
+        INSERT INTO user_branch_assignments (id, user_id, branch_id, is_primary)
+        VALUES ($1, $2, $3, TRUE)
+        ON CONFLICT (user_id, branch_id) DO UPDATE SET is_primary = TRUE
+        `,
+        [`uba-${crypto.randomBytes(4).toString('hex')}`, created.id, branch.id]
+      );
       await pgLogSecurityEvent(
         actor,
         'STATUS_CHANGED',
@@ -466,6 +578,20 @@ export const pgOrgRepo = {
       );
 
       const updated = mapUserRow(res.rows[0]);
+      if (patch.branchId && branchId !== cur.branchId) {
+        await client.query(
+          'UPDATE user_branch_assignments SET is_primary = FALSE WHERE user_id = $1 AND branch_id <> $2',
+          [updated.id, branchId]
+        );
+        await client.query(
+          `
+          INSERT INTO user_branch_assignments (id, user_id, branch_id, is_primary)
+          VALUES ($1, $2, $3, TRUE)
+          ON CONFLICT (user_id, branch_id) DO UPDATE SET is_primary = TRUE
+          `,
+          [`uba-${crypto.randomBytes(4).toString('hex')}`, updated.id, branchId]
+        );
+      }
       if (cur.role !== updated.role) {
         await pgLogSecurityEvent(
           actor,
@@ -691,12 +817,12 @@ export const pgOrgRepo = {
     assignedDoctorName?: string;
   }): Promise<{ roster: StaffDutyRoster; created: boolean }> {
     return withPgTransaction(async (client) => {
-      const staffRes = await client.query('SELECT id, name, role FROM users WHERE id = $1', [input.staffId]);
+      const staffRes = await client.query('SELECT id, name, role, branch_id FROM users WHERE id = $1', [input.staffId]);
       const staff = staffRes.rows[0];
-      const brRes = input.branchId
-        ? await client.query('SELECT id, name FROM branches WHERE id = $1', [input.branchId])
-        : await client.query('SELECT id, name FROM branches ORDER BY created_at ASC LIMIT 1');
-      const branch = brRes.rows[0] || { id: 'br-dhanmondi', name: 'Dhanmondi Main Center' };
+      const branch = await pgRequireBranch(
+        input.branchId || (staff?.branch_id ? String(staff.branch_id) : undefined),
+        client
+      );
 
       const existingRes = await client.query(
         'SELECT * FROM staff_duty_roster WHERE staff_id = $1 AND duty_date = $2::date FOR UPDATE',

@@ -40,6 +40,7 @@ export const PatientListView: React.FC = () => {
     addToast,
     language,
     navigate,
+    branches,
   } = useApp();
   const isBn = language === 'bn';
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -274,7 +275,9 @@ export const PatientListView: React.FC = () => {
                   )}
                   <span className="flex items-center gap-1">
                     <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                    Dhanmondi Main Branch
+                    {branches.find((b) => b.id === patientDetail.patient.branchId)?.name ||
+                      patientDetail.patient.branchId ||
+                      'Primary Branch'}
                   </span>
                 </div>
               </div>

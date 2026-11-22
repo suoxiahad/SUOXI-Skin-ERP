@@ -4,22 +4,70 @@
  *
  * Security Policy:
  *  - NEVER creates demo patients, invoices, inventory, referrals, or default passwords.
- *  - Requires explicit ADMIN_EMAIL and strong ADMIN_PASSWORD (>= 12 chars, mixed case,
+ *  - Requires explicit strong ADMIN_PASSWORD (>= 12 chars, mixed case,
  *    number, and symbol) via environment variables.
- *  - Seeds only mandatory structural records (organization, primary branch, RBAC roles,
- *    payment methods, appointment sources) if absent, then creates/updates the super_admin user
- *    with Argon2id hashing and `must_change_password = TRUE`.
+ *  - Reads ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME, ADMIN_EMPLOYEE_ID,
+ *    ADMIN_PHONE, and ADMIN_BRANCH_ID from environment variables.
+ *  - Checks whether the specified branch exists; creates the initial Shantinagar
+ *    branch (br-shantinagar) without invented optional contact details if absent,
+ *    and preserves existing branch details if already present.
+ *  - Ensures organization, mandatory RBAC roles, payment methods, and appointment
+ *    sources exist idempotently, creates/updates super_admin with Argon2id hashing
+ *    and `must_change_password = TRUE`, and assigns the primary branch.
  *
  * Usage:
- *   ADMIN_EMAIL="admin@suoxi.tech" ADMIN_PASSWORD="<strong-password>" npm run pg:create-admin
+ *   ADMIN_PASSWORD="<strong-password>" npm run pg:create-admin
  */
 
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import argon2 from 'argon2';
 import { closePgPool, isPostgresConfigured, withPgTransaction } from './pgPool.ts';
 
-function validateStrongPassword(password: string): string | null {
+export const DEFAULT_ORG_ID = 'org-suoxi';
+
+export const INITIAL_SHANTINAGAR_BRANCH = {
+  id: 'br-shantinagar',
+  code: 'SHN',
+  name: 'Shantinagar',
+  nameBn: 'শান্তিনগর',
+  address: '',
+  city: '',
+  phone: '',
+  email: null as string | null,
+  managerName: null as string | null,
+  managerPhone: null as string | null,
+  operatingHours: null as string | null,
+  isActive: true,
+};
+
+export interface ProvisionAdminOptions {
+  email?: string;
+  password: string;
+  name?: string;
+  employeeId?: string;
+  phone?: string;
+  branchId?: string;
+  branchCode?: string;
+  branchName?: string;
+  branchNameBn?: string;
+}
+
+export interface ProvisionAdminResult {
+  organizationId: string;
+  branchId: string;
+  branchCode: string;
+  branchName: string;
+  branchCreated: boolean;
+  userId: string;
+  employeeId: string;
+  email: string;
+  mustChangePassword: boolean;
+}
+
+export function validateStrongPassword(password: string): string | null {
   if (password.length < 12) return 'ADMIN_PASSWORD must be at least 12 characters long.';
   if (!/[A-Z]/.test(password)) return 'ADMIN_PASSWORD must include at least one uppercase letter.';
   if (!/[a-z]/.test(password)) return 'ADMIN_PASSWORD must include at least one lowercase letter.';
@@ -56,28 +104,61 @@ const APPOINTMENT_SOURCES = [
   { id: 'src-portal', code: 'portal', name: 'Patient Portal', nameBn: 'পেশেন্ট পোর্টাল' },
 ];
 
-async function run(): Promise<void> {
-  if (!isPostgresConfigured()) {
-    console.error('[SUOXI Create Admin] DATABASE_URL (postgresql://...) is required.');
-    process.exit(1);
+function deriveCustomBranchMetadata(
+  branchId: string,
+  overrides?: { code?: string; name?: string; nameBn?: string }
+): { id: string; code: string; name: string; nameBn: string } {
+  if (branchId === INITIAL_SHANTINAGAR_BRANCH.id) {
+    return {
+      id: INITIAL_SHANTINAGAR_BRANCH.id,
+      code: overrides?.code?.trim().toUpperCase() || INITIAL_SHANTINAGAR_BRANCH.code,
+      name: overrides?.name?.trim() || INITIAL_SHANTINAGAR_BRANCH.name,
+      nameBn: overrides?.nameBn?.trim() || INITIAL_SHANTINAGAR_BRANCH.nameBn,
+    };
   }
 
-  const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  const employeeId = (process.env.ADMIN_EMPLOYEE_ID || '0001').trim().toUpperCase();
-  const password = process.env.ADMIN_PASSWORD || '';
-  const name = (process.env.ADMIN_NAME || 'SUOXI Super Admin').trim();
-  const phone = (process.env.ADMIN_PHONE || '+8801700000000').trim();
-  const branchId = (process.env.ADMIN_BRANCH_ID || 'br-dhanmondi').trim();
+  const slug = branchId.replace(/^br-/i, '').trim() || branchId;
+  const fallbackName = slug
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+  const fallbackCode = slug.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase() || 'BR1';
+
+  return {
+    id: branchId,
+    code: overrides?.code?.trim().toUpperCase() || fallbackCode,
+    name: overrides?.name?.trim() || fallbackName || branchId,
+    nameBn: overrides?.nameBn?.trim() || '',
+  };
+}
+
+export async function provisionSuperAdminAndInitialBranch(
+  opts: ProvisionAdminOptions
+): Promise<ProvisionAdminResult> {
+  const email = (opts.email ?? process.env.ADMIN_EMAIL ?? 'suoxiwork1@gmail.com').trim().toLowerCase();
+  const employeeId = (opts.employeeId ?? process.env.ADMIN_EMPLOYEE_ID ?? '24040823').trim().toUpperCase();
+  const password = opts.password ?? process.env.ADMIN_PASSWORD ?? '';
+  const name = (opts.name ?? process.env.ADMIN_NAME ?? 'Md Ahad Ali').trim();
+  const phone = (opts.phone ?? process.env.ADMIN_PHONE ?? '01314113066').trim();
+  const branchId = (opts.branchId ?? process.env.ADMIN_BRANCH_ID ?? INITIAL_SHANTINAGAR_BRANCH.id).trim();
 
   if (!email || !email.includes('@')) {
-    console.error('[SUOXI Create Admin] Set ADMIN_EMAIL to a valid administrator email address.');
-    process.exit(1);
+    throw new Error('Set ADMIN_EMAIL to a valid administrator email address.');
+  }
+  if (!employeeId) {
+    throw new Error('Set ADMIN_EMPLOYEE_ID to a valid employee identifier.');
+  }
+  if (!name) {
+    throw new Error('Set ADMIN_NAME to the administrator full name.');
+  }
+  if (!branchId) {
+    throw new Error('Set ADMIN_BRANCH_ID to the target primary branch ID.');
   }
 
   const pwdError = validateStrongPassword(password);
   if (pwdError) {
-    console.error(`[SUOXI Create Admin] ${pwdError}`);
-    process.exit(1);
+    throw new Error(pwdError);
   }
 
   const passwordHash = await argon2.hash(password, {
@@ -87,30 +168,69 @@ async function run(): Promise<void> {
     parallelism: 1,
   });
 
-  await withPgTransaction(async (client) => {
+  return withPgTransaction(async (client) => {
+    // 1. Ensure organization exists before creating or referencing branches
     await client.query(
       `
       INSERT INTO organizations (id, code, name, name_bn, timezone, currency)
-      VALUES ('org-suoxi', 'SUOXI', 'SUOXI Skin Care & Aesthetic Center', 'সুওক্সি স্কিন কেয়ার অ্যান্ড এস্থেটিক সেন্টার', 'Asia/Dhaka', 'BDT')
-      ON CONFLICT (id) DO NOTHING
-      `
-    );
-
-    await client.query(
-      `
-      INSERT INTO branches (
-        id, organization_id, code, name, name_bn, address, city, phone, email, operating_hours, is_active
-      )
-      VALUES (
-        $1, 'org-suoxi', 'DHN', 'Dhanmondi Main Center', 'ধানমন্ডি মেইন সেন্টার',
-        'House 42, Road 9/A, Dhanmondi, Dhaka-1209', 'Dhaka', '+88029671122',
-        'care@suoxi.tech', '09:00 AM - 08:30 PM (Sat - Thu)', TRUE
-      )
+      VALUES ($1, 'SUOXI', 'SUOXI Skin Care & Aesthetic Center', 'সুওক্সি স্কিন কেয়ার অ্যান্ড এস্থেটিক সেন্টার', 'Asia/Dhaka', 'BDT')
       ON CONFLICT (id) DO NOTHING
       `,
-      [branchId]
+      [DEFAULT_ORG_ID]
     );
 
+    // 2. Check whether the specified branch exists; preserve existing info if present
+    const existingBranchRes = await client.query<{
+      id: string;
+      code: string;
+      name: string;
+      organization_id: string | null;
+    }>('SELECT id, code, name, organization_id FROM branches WHERE id = $1 LIMIT 1', [branchId]);
+
+    let resolvedBranchId = branchId;
+    let resolvedBranchCode = '';
+    let resolvedBranchName = '';
+    let branchCreated = false;
+
+    if (existingBranchRes.rowCount && existingBranchRes.rowCount > 0) {
+      const existingBranch = existingBranchRes.rows[0];
+      resolvedBranchId = String(existingBranch.id);
+      resolvedBranchCode = String(existingBranch.code);
+      resolvedBranchName = String(existingBranch.name);
+      if (!existingBranch.organization_id) {
+        await client.query('UPDATE branches SET organization_id = $2 WHERE id = $1 AND organization_id IS NULL', [
+          resolvedBranchId,
+          DEFAULT_ORG_ID,
+        ]);
+      }
+    } else {
+      const meta = deriveCustomBranchMetadata(branchId, {
+        code: opts.branchCode ?? process.env.ADMIN_BRANCH_CODE,
+        name: opts.branchName ?? process.env.ADMIN_BRANCH_NAME,
+        nameBn: opts.branchNameBn ?? process.env.ADMIN_BRANCH_NAME_BN,
+      });
+
+      await client.query(
+        `
+        INSERT INTO branches (
+          id, organization_id, code, name, name_bn, address, city, phone,
+          email, manager_name, manager_phone, operating_hours, is_active, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, '', '', '',
+          NULL, NULL, NULL, NULL, TRUE, NOW(), NOW()
+        )
+        `,
+        [meta.id, DEFAULT_ORG_ID, meta.code, meta.name, meta.nameBn]
+      );
+
+      resolvedBranchId = meta.id;
+      resolvedBranchCode = meta.code;
+      resolvedBranchName = meta.name;
+      branchCreated = true;
+    }
+
+    // 3. Seed mandatory system RBAC roles, payment methods, and appointment sources idempotently
     for (const role of SYSTEM_ROLES) {
       await client.query(
         `
@@ -144,26 +264,40 @@ async function run(): Promise<void> {
       );
     }
 
-    const existing = await client.query<{ id: string }>(
-      'SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1',
-      [email]
+    // 4. Create or update the Super Admin user using Argon2id and must_change_password = TRUE
+    const existingUserRes = await client.query<{ id: string }>(
+      `
+      SELECT id
+      FROM users
+      WHERE LOWER(email) = $1 OR UPPER(COALESCE(employee_id, '')) = $2
+      ORDER BY CASE WHEN LOWER(email) = $1 THEN 0 ELSE 1 END
+      LIMIT 1
+      `,
+      [email, employeeId]
     );
 
     let userId: string;
-    if (existing.rowCount && existing.rowCount > 0) {
-      userId = existing.rows[0].id;
+    if (existingUserRes.rowCount && existingUserRes.rowCount > 0) {
+      userId = String(existingUserRes.rows[0].id);
       await client.query(
         `
         UPDATE users
-        SET employee_id = COALESCE(NULLIF(employee_id, ''), $2),
-            password_hash = $3,
+        SET employee_id = $2,
+            name = $3,
+            email = $4,
+            phone = $5,
+            password_hash = $6,
             role = 'super_admin',
+            branch_id = $7,
+            branch_name = $8,
             status = 'active',
+            permissions = '["*"]'::jsonb,
+            designation = COALESCE(NULLIF(designation, ''), 'Managing Director'),
             must_change_password = TRUE,
             updated_at = NOW()
         WHERE id = $1
         `,
-        [userId, employeeId, passwordHash]
+        [userId, employeeId, name, email, phone, passwordHash, resolvedBranchId, resolvedBranchName]
       );
     } else {
       userId = `usr-admin-${crypto.randomBytes(4).toString('hex')}`;
@@ -175,33 +309,77 @@ async function run(): Promise<void> {
         )
         VALUES (
           $1, $2, $3, $4, $5, TRUE, 'super_admin', $6,
-          $7, 'Dhanmondi Main Center', 'active', '["*"]'::jsonb, 'Managing Director'
+          $7, $8, 'active', '["*"]'::jsonb, 'Managing Director'
         )
         `,
-        [userId, employeeId, name, email, passwordHash, phone, branchId]
+        [userId, employeeId, name, email, passwordHash, phone, resolvedBranchId, resolvedBranchName]
       );
     }
 
+    // 5. Assign the user to the specified primary branch
+    await client.query(
+      'UPDATE user_branch_assignments SET is_primary = FALSE WHERE user_id = $1 AND branch_id <> $2',
+      [userId, resolvedBranchId]
+    );
     await client.query(
       `
       INSERT INTO user_branch_assignments (id, user_id, branch_id, is_primary)
       VALUES ($1, $2, $3, TRUE)
-      ON CONFLICT (user_id, branch_id) DO NOTHING
+      ON CONFLICT (user_id, branch_id) DO UPDATE SET is_primary = TRUE
       `,
-      [`uba-${crypto.randomBytes(4).toString('hex')}`, userId, branchId]
+      [`uba-${crypto.randomBytes(4).toString('hex')}`, userId, resolvedBranchId]
     );
+
+    return {
+      organizationId: DEFAULT_ORG_ID,
+      branchId: resolvedBranchId,
+      branchCode: resolvedBranchCode,
+      branchName: resolvedBranchName,
+      branchCreated,
+      userId,
+      employeeId,
+      email,
+      mustChangePassword: true,
+    };
+  });
+}
+
+async function runCli(): Promise<void> {
+  if (!isPostgresConfigured()) {
+    console.error('[SUOXI Create Admin] DATABASE_URL (postgresql://...) is required.');
+    process.exit(1);
+  }
+
+  const result = await provisionSuperAdminAndInitialBranch({
+    email: process.env.ADMIN_EMAIL,
+    password: process.env.ADMIN_PASSWORD || '',
+    name: process.env.ADMIN_NAME,
+    employeeId: process.env.ADMIN_EMPLOYEE_ID,
+    phone: process.env.ADMIN_PHONE,
+    branchId: process.env.ADMIN_BRANCH_ID,
+    branchCode: process.env.ADMIN_BRANCH_CODE,
+    branchName: process.env.ADMIN_BRANCH_NAME,
+    branchNameBn: process.env.ADMIN_BRANCH_NAME_BN,
   });
 
   console.log(
-    `[SUOXI Create Admin] Production super_admin ready (Employee ID: ${employeeId}, Email: ${email}, Argon2id hashed, must_change_password=true).`
+    `[SUOXI Create Admin] Production super_admin ready (Employee ID: ${result.employeeId}, Email: ${result.email}, Primary Branch: ${result.branchId} [${result.branchName}], Branch ${result.branchCreated ? 'created' : 'preserved'}, Argon2id hashed, must_change_password=true).`
   );
 }
 
-run()
-  .catch((err) => {
-    console.error('[SUOXI Create Admin] Failed:', err instanceof Error ? err.message : err);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closePgPool();
-  });
+const isDirectEntry =
+  typeof process !== 'undefined' &&
+  Array.isArray(process.argv) &&
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectEntry) {
+  runCli()
+    .catch((err) => {
+      console.error('[SUOXI Create Admin] Failed:', err instanceof Error ? err.message : err);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await closePgPool();
+    });
+}

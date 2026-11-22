@@ -260,7 +260,7 @@ export const QuickBookModal: React.FC<QuickBookModalProps> = ({
         diseaseName: diseaseName.trim(),
         bookingMethod,
         branchId,
-        branchName: branchObj?.name || 'Dhanmondi Main Center',
+        branchName: branchObj?.name || apt.branchName || '',
         doctorId,
         doctorName: doctorName || 'Assigned Doctor',
         appointmentDate,

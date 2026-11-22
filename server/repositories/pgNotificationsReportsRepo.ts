@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import type { User } from '../../src/types/index.ts';
 import { sanitizeCsvCell } from '../config/securityConfig.ts';
 import { pgQuery, withPgTransaction } from '../db/pgPool.ts';
-import { pgLogAuditEvent, toDateOnly, toIsoString, toNumber } from './pgHelpers.ts';
+import { pgLogAuditEvent, pgRequireBranch, toDateOnly, toIsoString, toNumber } from './pgHelpers.ts';
 
 // ============================================================================
 // 1. NOTIFICATIONS QUEUE & EVENT RULES
@@ -266,6 +266,7 @@ export async function pgLogCallContact(
   ipAddress: string
 ) {
   const id = `ccl-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const branch = await pgRequireBranch(payload.branchId || actor.branchId);
   const res = await pgQuery(
     `
     INSERT INTO call_contact_logs (
@@ -280,7 +281,7 @@ export async function pgLogCallContact(
       payload.taskId || null,
       payload.appointmentId || null,
       payload.patientId,
-      payload.branchId || actor.branchId || 'br-dhanmondi',
+      branch.id,
       payload.outcome,
       payload.patientIntent || null,
       payload.callNotes || '',

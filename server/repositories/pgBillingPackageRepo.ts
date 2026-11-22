@@ -25,6 +25,7 @@ import {
   applyPackageFinancials,
   generateCode,
   pgLogAuditEvent,
+  pgRequireBranch,
   toDateOnly,
   toIsoString,
   toNumber,
@@ -285,9 +286,9 @@ export const pgBillingPackageRepo = {
       if (existingInv.rows.length === 0) {
         const ptRes = await client.query('SELECT * FROM patients WHERE id = $1', [input.patientId]);
         const pt = ptRes.rows[0];
-        const branchId = pt?.branch_id || actor.branchId || 'br-dhanmondi';
-        const brRes = await client.query('SELECT name FROM branches WHERE id = $1', [branchId]);
-        const branchName = String(brRes.rows[0]?.name || 'Dhanmondi Main Center');
+        const branch = await pgRequireBranch(pt?.branch_id || actor.branchId, client);
+        const branchId = branch.id;
+        const branchName = branch.name;
 
         const invItems = [
           {
@@ -440,6 +441,7 @@ export const pgBillingPackageRepo = {
       let invRow = invRes.rows[0];
       if (!invRow) {
         const newInvId = rawPkg.invoiceId || `inv-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+        const branch = await pgRequireBranch(actor.branchId, client);
         const createdInv = await client.query(
           `
           INSERT INTO invoices (
@@ -448,8 +450,8 @@ export const pgBillingPackageRepo = {
             paid_amount_bdt, due_amount_bdt, status, created_by, created_at, updated_at
           )
           VALUES (
-            $1, $2, $3, $4, $5, 'Dhanmondi Main Center', $6::jsonb,
-            $7, 0, 0, 0, $7, 0, $7, 'unpaid', $8, NOW(), NOW()
+            $1, $2, $3, $4, $5, $6, $7::jsonb,
+            $8, 0, 0, 0, $8, 0, $8, 'unpaid', $9, NOW(), NOW()
           )
           RETURNING *
           `,
@@ -458,7 +460,8 @@ export const pgBillingPackageRepo = {
             generateCode('INV'),
             rawPkg.patientId,
             rawPkg.patientName,
-            actor.branchId || 'br-dhanmondi',
+            branch.id,
+            branch.name,
             JSON.stringify([
               {
                 id: `it-${Date.now()}`,
@@ -774,8 +777,7 @@ export const pgBillingPackageRepo = {
       }
       const pt = ptRes.rows[0];
 
-      const brRes = await client.query('SELECT id, name FROM branches WHERE id = $1', [data.branchId]);
-      const branch = brRes.rows[0] || { id: 'br-dhanmondi', name: 'Dhanmondi Main Center' };
+      const branch = await pgRequireBranch(data.branchId || pt.branch_id || actor.branchId, client);
 
       const vatPercent = Math.max(0, Number(data.vatPercent ?? 0));
       const discountBDT = Math.max(0, Number(data.discountBDT ?? 0));
@@ -1099,6 +1101,7 @@ export const pgBillingPackageRepo = {
   ): Promise<DailyClosingReport> {
     return withPgTransaction(async (client) => {
       const id = `cls-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+      const branch = await pgRequireBranch(input.branchId || actor.branchId, client);
       const res = await client.query(
         `
         INSERT INTO daily_closing_reports (
@@ -1120,8 +1123,8 @@ export const pgBillingPackageRepo = {
           input.closingDate,
           actor.id,
           actor.name,
-          input.branchId || actor.branchId || 'br-dhanmondi',
-          input.branchName || actor.branchName || 'Dhanmondi Main Center',
+          branch.id,
+          input.branchName || branch.name,
           input.openingCashBDT || 0,
           input.expectedCashBDT || 0,
           input.actualCashCountedBDT || 0,

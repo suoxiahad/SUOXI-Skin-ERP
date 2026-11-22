@@ -20,7 +20,7 @@ import { formatBDT, formatDateDhaka, formatTime12h } from '../../../utils/format
 import { Skeleton } from '../../common/Skeleton.tsx';
 
 export const PatientPortalView: React.FC = () => {
-  const { setActivePrescriptionPrintId, language } = useApp();
+  const { setActivePrescriptionPrintId, language, branches } = useApp();
   const [portalData, setPortalData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -78,7 +78,12 @@ export const PatientPortalView: React.FC = () => {
         </div>
 
         <div className="mt-4 pt-3 border-t border-white/20 flex items-center justify-between text-xs">
-          <span>{patient.branchId === 'br-dhanmondi' ? 'Dhanmondi Main Center' : 'Gulshan Lounge'}</span>
+          <span>
+            {patient.branchName ||
+              branches.find((b) => b.id === patient.branchId)?.name ||
+              patient.branchId ||
+              'Clinic Center'}
+          </span>
           <span className="font-mono">{patient.phone}</span>
         </div>
       </div>

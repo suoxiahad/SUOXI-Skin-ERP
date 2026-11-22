@@ -58,7 +58,12 @@ import {
   pgEnqueueNotification,
   pgGenerateReport,
 } from '../repositories/pgNotificationsReportsRepo.ts';
+import {
+  INITIAL_SHANTINAGAR_BRANCH,
+  provisionSuperAdminAndInitialBranch,
+} from '../db/createAdmin.ts';
 import { pgOpsSettingsRepo } from '../repositories/pgOpsSettingsRepo.ts';
+import { pgOrgRepo } from '../repositories/pgOrgRepo.ts';
 import { pgPatientClinicalRepo } from '../repositories/pgPatientClinicalRepo.ts';
 import {
   pgCompletePortalSetup,
@@ -894,6 +899,150 @@ async function main() {
       } finally {
         process.env.NODE_ENV = prevEnv;
       }
+    });
+
+    await test('12. Super Admin provisioning creates br-shantinagar without invented fields & preserves existing details on re-run', async () => {
+      const strongPassword = 'SuoxiAdmin!2026#Strong';
+      const firstResult = await provisionSuperAdminAndInitialBranch({
+        password: strongPassword,
+      });
+
+      assert.equal(firstResult.organizationId, 'org-suoxi');
+      assert.equal(firstResult.branchId, INITIAL_SHANTINAGAR_BRANCH.id);
+      assert.equal(firstResult.branchCode, 'SHN');
+      assert.equal(firstResult.branchName, 'Shantinagar');
+      assert.equal(firstResult.branchCreated, true);
+      assert.equal(firstResult.employeeId, '24040823');
+      assert.equal(firstResult.email, 'suoxiwork1@gmail.com');
+      assert.equal(firstResult.mustChangePassword, true);
+
+      const branchRes = await pgQuery('SELECT * FROM branches WHERE id = $1', ['br-shantinagar']);
+      assert.equal(branchRes.rows.length, 1);
+      const branchRow = branchRes.rows[0];
+      assert.equal(branchRow.code, 'SHN');
+      assert.equal(branchRow.name, 'Shantinagar');
+      assert.equal(branchRow.name_bn, 'শান্তিনগর');
+      assert.equal(branchRow.is_active, true);
+      assert.equal(branchRow.address, '');
+      assert.equal(branchRow.city, '');
+      assert.equal(branchRow.phone, '');
+      assert.equal(branchRow.email, null);
+      assert.equal(branchRow.manager_name, null);
+      assert.equal(branchRow.operating_hours, null);
+
+      const adminRes = await pgQuery('SELECT * FROM users WHERE employee_id = $1', ['24040823']);
+      assert.equal(adminRes.rows.length, 1);
+      const adminRow = adminRes.rows[0];
+      assert.equal(adminRow.name, 'Md Ahad Ali');
+      assert.equal(adminRow.email, 'suoxiwork1@gmail.com');
+      assert.equal(adminRow.phone, '01314113066');
+      assert.equal(adminRow.role, 'super_admin');
+      assert.equal(adminRow.branch_id, 'br-shantinagar');
+      assert.equal(adminRow.branch_name, 'Shantinagar');
+      assert.equal(adminRow.must_change_password, true);
+      assert.ok(String(adminRow.password_hash).startsWith('$argon2id$'));
+      assert.equal(await argon2.verify(String(adminRow.password_hash), strongPassword), true);
+
+      const assignRes = await pgQuery(
+        'SELECT is_primary FROM user_branch_assignments WHERE user_id = $1 AND branch_id = $2',
+        [adminRow.id, 'br-shantinagar']
+      );
+      assert.equal(assignRes.rows.length, 1);
+      assert.equal(assignRes.rows[0].is_primary, true);
+
+      // Update optional details on br-shantinagar, then re-run provisioning: existing branch details must NOT be overwritten
+      await pgQuery(
+        `UPDATE branches SET address = '78 Shantinagar Road', city = 'Dhaka', phone = '01700000099', email = 'shn@suoxi.example' WHERE id = 'br-shantinagar'`
+      );
+      const secondResult = await provisionSuperAdminAndInitialBranch({
+        password: strongPassword,
+      });
+      assert.equal(secondResult.branchCreated, false);
+
+      const preservedRes = await pgQuery('SELECT address, city, phone, email FROM branches WHERE id = $1', [
+        'br-shantinagar',
+      ]);
+      assert.equal(preservedRes.rows[0].address, '78 Shantinagar Road');
+      assert.equal(preservedRes.rows[0].city, 'Dhaka');
+      assert.equal(preservedRes.rows[0].phone, '01700000099');
+      assert.equal(preservedRes.rows[0].email, 'shn@suoxi.example');
+    });
+
+    await test('13. Dynamic Branch Management CRUD, duplicate code protection, user sync, and activeOnly filtering', async () => {
+      const adminActor = {
+        id: 'usr-admin',
+        name: 'Super Admin',
+        email: 'admin@suoxi.tech',
+        role: 'super_admin' as const,
+        phone: '+8801700000001',
+        branchId: 'br-shantinagar',
+        branchName: 'Shantinagar',
+      };
+
+      const created = await pgOrgRepo.createBranch(
+        {
+          name: 'Banani',
+          nameBn: 'বনানী',
+          code: 'BNN',
+        },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.equal(created.id, 'br-bnn');
+      assert.equal(created.code, 'BNN');
+      assert.equal(created.name, 'Banani');
+      assert.equal(created.nameBn, 'বনানী');
+      assert.equal(created.address, '');
+      assert.equal(created.city, '');
+      assert.equal(created.phone, '');
+      assert.equal(created.email, undefined);
+      assert.equal(created.operatingHours, undefined);
+      assert.equal(created.isActive, true);
+
+      // Duplicate code must throw 409
+      await assert.rejects(
+        () =>
+          pgOrgRepo.createBranch(
+            {
+              name: 'Banani Duplicate',
+              code: 'bnn',
+            },
+            adminActor,
+            '127.0.0.1'
+          ),
+        (err: any) => err?.statusCode === 409
+      );
+
+      // Update optional details + rename branch -> should sync users.branch_name
+      const updated = await pgOrgRepo.updateBranch(
+        created.id,
+        {
+          name: 'Banani Center',
+          address: 'Road 11, Banani',
+          city: 'Dhaka',
+          phone: '01800000000',
+          email: 'banani@suoxi.example',
+          operatingHours: '10:00 AM - 08:00 PM',
+        },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.ok(updated);
+      assert.equal(updated.name, 'Banani Center');
+      assert.equal(updated.address, 'Road 11, Banani');
+      assert.equal(updated.operatingHours, '10:00 AM - 08:00 PM');
+
+      // Deactivate and check activeOnly filter
+      const deactivated = await pgOrgRepo.setBranchStatus(created.id, false, adminActor, '127.0.0.1');
+      assert.equal(deactivated?.isActive, false);
+      const activeList = await pgOrgRepo.listBranches({ activeOnly: true });
+      assert.equal(activeList.some((b) => b.id === created.id), false);
+
+      // Reactivate
+      const reactivated = await pgOrgRepo.setBranchStatus(created.id, true, adminActor, '127.0.0.1');
+      assert.equal(reactivated?.isActive, true);
+      const activeListAfter = await pgOrgRepo.listBranches({ activeOnly: true });
+      assert.equal(activeListAfter.some((b) => b.id === created.id), true);
     });
   } finally {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));

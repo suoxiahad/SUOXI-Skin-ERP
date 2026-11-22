@@ -216,19 +216,16 @@ function sendError(res: Response, statusCode: number, code: string, message: str
 
 const branches: Branch[] = [
   {
-    id: 'br-dhanmondi',
-    name: 'Dhanmondi Main Center',
-    nameBn: 'ধানমন্ডি মেইন সেন্টার',
-    code: 'DHN',
-    address: 'House 42, Road 9/A, Dhanmondi, Dhaka-1209',
-    city: 'Dhaka',
-    phone: '+88029671122',
-    email: 'dhanmondi@suoxiclinic.com',
-    managerName: 'Farzana Yasmin',
-    managerPhone: '+8801711998877',
-    operatingHours: '09:00 AM - 08:30 PM (Sat - Thu)',
+    id: 'br-shantinagar',
+    name: 'Shantinagar',
+    nameBn: 'শান্তিনগর',
+    code: 'SHN',
+    address: '',
+    city: '',
+    phone: '',
     isActive: true,
-    createdAt: '2024-01-15T00:00:00Z',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
   },
   {
     id: 'br-gulshan',
@@ -244,6 +241,7 @@ const branches: Branch[] = [
     operatingHours: '10:00 AM - 09:00 PM (Everyday)',
     isActive: true,
     createdAt: '2024-06-01T00:00:00Z',
+    updatedAt: '2024-06-01T00:00:00Z',
   },
   {
     id: 'br-uttara',
@@ -259,8 +257,17 @@ const branches: Branch[] = [
     operatingHours: '09:30 AM - 08:00 PM (Sat - Thu)',
     isActive: true,
     createdAt: '2025-02-10T00:00:00Z',
+    updatedAt: '2025-02-10T00:00:00Z',
   },
 ];
+
+function resolvePrototypeBranch(preferredId?: string): Branch {
+  if (preferredId) {
+    const exact = branches.find((b) => b.id === preferredId);
+    if (exact) return exact;
+  }
+  return branches.find((b) => b.isActive !== false) || branches[0];
+}
 
 let currentUser: User = {
   id: 'usr-101',
@@ -270,8 +277,8 @@ let currentUser: User = {
   email: 'nusrat.jahan@suoxiclinic.com',
   role: 'doctor',
   phone: '+8801711223344',
-  branchId: 'br-dhanmondi',
-  branchName: 'Dhanmondi Main Center',
+  branchId: 'br-shantinagar',
+  branchName: 'Shantinagar',
   specialization: 'MBBS, DDV, Consultant Aesthetic Dermatologist',
   bmdcRegNo: 'BMDC-A-48921',
 };
@@ -288,9 +295,9 @@ const initialSeedPatients: Patient[] = [
     dateOfBirth: '1998-04-12',
     age: 28,
     bloodGroup: 'B+',
-    address: 'House 42, Road 7, Dhanmondi, Dhaka',
+    address: 'Shantinagar, Dhaka',
     city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
     allergies: ['Dust', 'Sunscreens with oxybenzone'],
     skinType: 'combination',
     medicalHistory: 'Mild adult hormonal acne, hyperpigmentation on malar cheeks. Undergoing HydraFacial.',
@@ -310,7 +317,7 @@ const initialSeedPatients: Patient[] = [
     bloodGroup: 'O+',
     address: 'Road 12, Banani DOHS, Dhaka',
     city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
     allergies: [],
     skinType: 'oily',
     medicalHistory: 'Enlarged pores, sun damage. Scheduled for Laser Carbon Peel.',
@@ -330,7 +337,7 @@ const initialSeedPatients: Patient[] = [
     bloodGroup: 'A+',
     address: 'House 14, Road 33, Gulshan-2, Dhaka',
     city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
     allergies: ['Salicylic acid high concentration'],
     skinType: 'sensitive',
     medicalHistory: 'Severe acne scarring, erythema. Scheduled for Acne Scar Revision consultation.',
@@ -348,9 +355,9 @@ const initialSeedPatients: Patient[] = [
     dateOfBirth: '1994-05-14',
     age: 32,
     bloodGroup: 'B+',
-    address: 'Road 5, Dhanmondi, Dhaka',
+    address: 'Shantinagar, Dhaka',
     city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
     allergies: ['Penicillin', 'Sulfa drugs'],
     skinType: 'combination',
     medicalHistory: 'Mild adult hormonal acne, hyperpigmentation on malar cheeks.',
@@ -407,7 +414,7 @@ const initialSeedPatients: Patient[] = [
     gender: 'female',
     age: 32,
     city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
     isFlaggedDuplicate: true,
     duplicateReason: 'Exact phone number match with SX-2026-0841 (Taslima Akter). Awaiting manual review.',
     createdAt: '2026-10-14T15:20:00Z',
@@ -423,9 +430,9 @@ const initialSeedPatients: Patient[] = [
     gender: 'male',
     age: 31,
     bloodGroup: 'B+',
-    address: 'Dhanmondi, Dhaka',
+    address: 'Shantinagar, Dhaka',
     city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
     allergies: [],
     medicalHistory: 'Acne and facial skin assessment.',
     skinType: 'combination',
@@ -479,7 +486,7 @@ export function syncPatientsToService(): void {
     patientService.upsertPatient({
       id: pt.id,
       patient_code: pt.patientIdCode,
-      branch_id: pt.branchId || 'br-dhanmondi',
+      branch_id: pt.branchId || resolvePrototypeBranch().id,
       full_name: pt.name,
       full_name_bn: pt.nameBn,
       gender: pt.gender as any,
@@ -508,8 +515,8 @@ const appointments: Appointment[] = [
     patientId: 'pt-1',
     patientName: 'Taslima Akter',
     patientPhone: '+8801712345678',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     doctorId: 'usr-101',
     doctorName: 'Dr. Nusrat Jahan',
     serviceCategory: 'Skin Care',
@@ -549,8 +556,8 @@ const appointments: Appointment[] = [
     patientId: 'pt-3',
     patientName: 'Sadia Rahman',
     patientPhone: '+8801911223399',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     doctorId: 'usr-101',
     doctorName: 'Dr. Nusrat Jahan',
     serviceCategory: 'General Consultation',
@@ -570,8 +577,8 @@ const appointments: Appointment[] = [
     patientId: 'pt-1',
     patientName: 'Taslima Akter',
     patientPhone: '+8801712345678',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     doctorId: 'usr-101',
     doctorName: 'Dr. Nusrat Jahan',
     serviceCategory: 'Skin Care',
@@ -599,7 +606,7 @@ const callTasks: CallCenterTask[] = [
     appointmentTime: '12:00',
     doctorName: 'Dr. Nusrat Jahan',
     serviceName: 'Aesthetic Dermatology Consultation',
-    branchName: 'Dhanmondi Main Center',
+    branchName: 'Shantinagar',
     callStatus: 'pending',
     smsStatus: 'gateway_accepted',
     callAttempts: 0,
@@ -620,7 +627,7 @@ const callTasks: CallCenterTask[] = [
     appointmentTime: '16:00',
     doctorName: 'Dr. Nusrat Jahan',
     serviceName: 'HydraFacial Follow-up & Serum Glow',
-    branchName: 'Dhanmondi Main Center',
+    branchName: 'Shantinagar',
     callStatus: 'confirmed',
     smsStatus: 'sent',
     callAttempts: 1,
@@ -1557,8 +1564,8 @@ const invoices: Invoice[] = [
     invoiceNumber: 'INV-2026-0591',
     patientId: 'pt-1',
     patientName: 'Taslima Akter',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     items: [
       {
         id: 'it-1',
@@ -1652,8 +1659,8 @@ const invoices: Invoice[] = [
     invoiceNumber: 'INV-2026-0594',
     patientId: 'pt-1',
     patientName: 'Sumaiya Rahman',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     items: [
       {
         id: 'it-304-1',
@@ -1689,8 +1696,8 @@ const invoices: Invoice[] = [
     invoiceNumber: 'INV-2026-0595',
     patientId: 'pt-2',
     patientName: 'Tanvir Ahmed',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     items: [
       {
         id: 'it-305-1',
@@ -1800,8 +1807,8 @@ const invoices: Invoice[] = [
     invoiceNumber: 'INV-2026-0598',
     patientId: 'pt-2',
     patientName: 'Md. Farhan Chowdhury',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     items: [
       {
         id: 'it-308-1',
@@ -1892,8 +1899,8 @@ const inventoryItems: InventoryItem[] = [
       { batchNumber: 'GLS-2025-B4', expiryDate: '2027-08-30', quantity: 18, costPriceBDT: 4500.0, receivedDate: '2026-01-15' }
     ],
     usageProtocol: '5ml per HydraFacial deep extraction step',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     status: 'in_stock',
     isActive: true,
   },
@@ -1942,8 +1949,8 @@ const inventoryItems: InventoryItem[] = [
       { batchNumber: 'SX-SUN-88', expiryDate: '2027-11-20', quantity: 35, costPriceBDT: 1400.0, receivedDate: '2026-03-01' }
     ],
     usageProtocol: 'Prescribed for home use post-laser & chemical peels',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     status: 'in_stock',
     isActive: true,
   },
@@ -1967,8 +1974,8 @@ const inventoryItems: InventoryItem[] = [
       { batchNumber: 'NDL-30G-77', expiryDate: '2028-05-10', quantity: 2, costPriceBDT: 1800.0, receivedDate: '2025-11-01' }
     ],
     usageProtocol: 'Single-use sterile needles for PRP micro-papules',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     status: 'low_stock',
     isActive: true,
   },
@@ -1992,8 +1999,8 @@ const inventoryItems: InventoryItem[] = [
       { batchNumber: 'SC-FER-902', expiryDate: '2027-04-18', quantity: 12, costPriceBDT: 14500.0, receivedDate: '2026-02-20' }
     ],
     usageProtocol: '4-5 drops in morning before moisturizer/sunscreen',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     status: 'in_stock',
     isActive: true,
   },
@@ -2042,8 +2049,8 @@ const inventoryItems: InventoryItem[] = [
       { batchNumber: 'MESO-COS2-77', expiryDate: '2027-09-10', quantity: 9, costPriceBDT: 16500.0, receivedDate: '2026-02-18' }
     ],
     usageProtocol: 'Apply daily according to dermatological depigmentation protocol',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     status: 'in_stock',
     isActive: true,
   },
@@ -2067,8 +2074,8 @@ const inventoryItems: InventoryItem[] = [
       { batchNumber: 'SX-CICA-102', expiryDate: '2027-06-30', quantity: 28, costPriceBDT: 950.0, receivedDate: '2026-03-05' }
     ],
     usageProtocol: 'Post-laser cooling mask & take-home soothing balm',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     status: 'in_stock',
     isActive: true,
   }
@@ -2166,7 +2173,7 @@ const purchaseOrders: PurchaseOrder[] = [
     totalBDT: 122000.0,
     status: 'received',
     paymentStatus: 'paid',
-    notes: 'Urgent restocking for Dhanmondi laser & peel clinic.',
+    notes: 'Urgent restocking for Shantinagar laser & peel clinic.',
     createdAt: '2026-10-18T10:00:00Z',
     createdBy: 'Sharmin Sultana (Inventory Mgr)',
   },
@@ -2529,7 +2536,7 @@ const stockAdjustments: StockAdjustment[] = [
     quantityDelta: -2,
     balanceAfter: 18,
     unitCostBDT: 4500.0,
-    reason: 'Consumed during morning clinical treatments at Dhanmondi.',
+    reason: 'Consumed during morning clinical treatments.',
     adjustedBy: 'Sharmin Sultana (Inventory Mgr)',
     adjustedAt: '2026-10-15T16:00:00Z',
   },
@@ -2606,7 +2613,7 @@ const auditEvents: AuditEvent[] = [
     resourceId: 'rx-1',
     details: 'Finalized Rx RX-2026-0312 for patient SX-2026-0841. Next session set to 2026-10-24.',
     ipAddress: '192.168.1.45',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
   },
   {
     id: 'aud-2',
@@ -2619,7 +2626,7 @@ const auditEvents: AuditEvent[] = [
     resourceId: 'inv-301',
     details: 'Recorded payment of ৳ 15,000.00 via card. Receipt RCP-2026-0042. Invoice marked PAID.',
     ipAddress: '192.168.1.80',
-    branchId: 'br-dhanmondi',
+    branchId: 'br-shantinagar',
   },
 ];
 
@@ -2636,8 +2643,8 @@ const staffUsers: User[] = [
     email: 'director@suoxiclinic.com',
     role: 'super_admin',
     phone: '+8801700000001',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Managing Director & Founder',
     status: 'active',
     lastLoginAt: '2026-11-03T09:15:00Z',
@@ -2651,8 +2658,8 @@ const staffUsers: User[] = [
     email: 'nusrat.jahan@suoxiclinic.com',
     role: 'doctor',
     phone: '+8801711223344',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Senior Consultant Aesthetic Dermatologist',
     specialization: 'MBBS, DDV, Consultant Aesthetic Dermatologist',
     bmdcRegNo: 'BMDC-A-48921',
@@ -2715,8 +2722,8 @@ const staffUsers: User[] = [
     email: 'sabrina.m@suoxiclinic.com',
     role: 'doctor',
     phone: '+8801722445566',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Resident Medical Officer (Aesthetic)',
     specialization: 'MBBS, Diploma in Clinical Dermatology',
     bmdcRegNo: 'BMDC-A-70112',
@@ -2736,8 +2743,8 @@ const staffUsers: User[] = [
     email: 'therapist.rina@suoxiclinic.com',
     role: 'therapist',
     phone: '+8801755443322',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Lead Aesthetic & Laser Therapist',
     certifications: ['HydraFacial MD Certified', 'Q-Switch Laser Specialist', 'Fractional CO2 Operator', 'HIFU Ultra-lift'],
     shift: 'morning',
@@ -2787,11 +2794,11 @@ const staffUsers: User[] = [
     employeeId: '0009',
     name: 'Fatima Zohra',
     nameBn: 'ফাতিমা জোহরা',
-    email: 'reception.dhanmondi@suoxiclinic.com',
+    email: 'reception.shantinagar@suoxiclinic.com',
     role: 'receptionist',
     phone: '+8801799887766',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Front Desk & Patient Relations Executive',
     shift: 'morning',
     status: 'active',
@@ -2822,8 +2829,8 @@ const staffUsers: User[] = [
     email: 'accounts@suoxiclinic.com',
     role: 'cashier',
     phone: '+8801844778899',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Senior Cashier & Accounts Officer',
     shift: 'morning',
     status: 'active',
@@ -2838,8 +2845,8 @@ const staffUsers: User[] = [
     email: 'inventory@suoxiclinic.com',
     role: 'inventory_manager',
     phone: '+8801966554433',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Pharmacy & Inventory Manager',
     shift: 'full_day',
     status: 'active',
@@ -2854,8 +2861,8 @@ const staffUsers: User[] = [
     email: 'callcenter.agent1@suoxiclinic.com',
     role: 'call_center',
     phone: '+8801833221100',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Lead Tele-Triage & Follow-up Agent',
     shift: 'morning',
     status: 'active',
@@ -2867,11 +2874,11 @@ const staffUsers: User[] = [
     employeeId: '0014',
     name: 'Farzana Yasmin',
     nameBn: 'ফারজানা ইয়াসমিন',
-    email: 'admin.dhanmondi@suoxiclinic.com',
+    email: 'admin.shantinagar@suoxiclinic.com',
     role: 'admin_manager',
     phone: '+8801711998877',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     designation: 'Clinic Operations Manager',
     shift: 'full_day',
     status: 'active',
@@ -3000,8 +3007,8 @@ const staffRosters: StaffDutyRoster[] = [
     staffId: 'usr-101',
     staffName: 'Dr. Nusrat Jahan',
     role: 'doctor',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     date: '2026-11-03',
     shift: 'morning',
     roomNumber: 'Room 201 (Laser Suite A)',
@@ -3012,8 +3019,8 @@ const staffRosters: StaffDutyRoster[] = [
     staffId: 'usr-109',
     staffName: 'Sabrina Mostafa',
     role: 'doctor',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     date: '2026-11-03',
     shift: 'morning',
     roomNumber: 'Room 203 (Consultation)',
@@ -3024,8 +3031,8 @@ const staffRosters: StaffDutyRoster[] = [
     staffId: 'usr-105',
     staffName: 'Rina Begum',
     role: 'therapist',
-    branchId: 'br-dhanmondi',
-    branchName: 'Dhanmondi Main Center',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
     date: '2026-11-03',
     shift: 'morning',
     roomNumber: 'Treatment Suite 1',
@@ -3104,7 +3111,7 @@ const userSecurityLogs: UserSecurityLog[] = [
     role: 'doctor',
     action: 'LOGIN',
     ipAddress: '192.168.1.45',
-    deviceInfo: 'Safari (iPad Pro, Dhanmondi Clinic Wi-Fi)',
+    deviceInfo: 'Safari (iPad Pro, Shantinagar Clinic Wi-Fi)',
     status: 'success',
     details: 'Doctor session authenticated for OPD consultations',
     timestamp: '2026-11-03T08:45:22Z',
@@ -3116,7 +3123,7 @@ const userSecurityLogs: UserSecurityLog[] = [
     role: 'cashier',
     action: 'LOGIN',
     ipAddress: '192.168.1.80',
-    deviceInfo: 'Chrome 120 (POS Terminal 1, Dhanmondi)',
+    deviceInfo: 'Chrome 120 (POS Terminal 1, Shantinagar)',
     status: 'success',
     details: 'Cashier session initiated for morning shift',
     timestamp: '2026-11-03T08:50:01Z',
@@ -3128,7 +3135,7 @@ const userSecurityLogs: UserSecurityLog[] = [
     role: 'therapist',
     action: 'LOGIN',
     ipAddress: '192.168.1.92',
-    deviceInfo: 'Edge (Laser Console Tablet, Dhanmondi)',
+    deviceInfo: 'Edge (Laser Console Tablet, Shantinagar)',
     status: 'success',
     details: 'Therapist session logged in for morning treatments',
     timestamp: '2026-11-03T08:30:14Z',
@@ -3200,7 +3207,7 @@ const userSecurityLogs: UserSecurityLog[] = [
     role: 'receptionist',
     action: 'PERMISSION_OVERRIDE',
     ipAddress: '192.168.1.10',
-    deviceInfo: 'Chrome 122 (Front Desk, Dhanmondi)',
+    deviceInfo: 'Chrome 122 (Front Desk, Shantinagar)',
     status: 'flagged',
     details: 'Attempted to edit locked financial invoice without cashier clearance; rejected',
     timestamp: '2026-11-01T11:20:00Z',
@@ -3225,7 +3232,7 @@ let generalSettings: ClinicGeneralSettings = {
   supportEmail: 'care@suoxiclinic.com',
   invoicePrefix: 'INV-2026-',
   posFooterNotes: 'Thank you for trusting SUOXI. Aesthetic treatments require post-procedure SPF sunblock compliance. Medicines once sold cannot be returned.',
-  primaryAddress: 'House 42, Road 9/A, Dhanmondi, Dhaka-1209, Bangladesh',
+  primaryAddress: '',
 };
 
 let schedulingSettings: ClinicSchedulingSettings = {
@@ -3295,7 +3302,7 @@ let activeSessions: ActiveSessionRecord[] = [
     userName: 'Dr. Nusrat Jahan',
     role: 'doctor',
     ipAddress: '192.168.1.45',
-    deviceInfo: 'Safari (iPad Pro 12.9, Dhanmondi Clinic Wi-Fi)',
+    deviceInfo: 'Safari (iPad Pro 12.9, Shantinagar Clinic Wi-Fi)',
     loginTime: '2026-11-03T08:45:22Z',
     lastActiveTime: '2026-11-03T09:12:00Z',
     isCurrentSession: true,
@@ -3317,7 +3324,7 @@ let activeSessions: ActiveSessionRecord[] = [
     userName: 'Shamim Hossain',
     role: 'cashier',
     ipAddress: '192.168.1.80',
-    deviceInfo: 'Chrome 120 (POS Terminal 1, Dhanmondi)',
+    deviceInfo: 'Chrome 120 (POS Terminal 1, Shantinagar)',
     loginTime: '2026-11-03T08:50:01Z',
     lastActiveTime: '2026-11-03T09:05:14Z',
     isCurrentSession: false,
@@ -3328,7 +3335,7 @@ let activeSessions: ActiveSessionRecord[] = [
     userName: 'Rina Begum',
     role: 'therapist',
     ipAddress: '192.168.1.92',
-    deviceInfo: 'Edge (Laser Console Tablet, Dhanmondi)',
+    deviceInfo: 'Edge (Laser Console Tablet, Shantinagar)',
     loginTime: '2026-11-03T08:30:14Z',
     lastActiveTime: '2026-11-03T09:10:00Z',
     isCurrentSession: false,
@@ -3623,8 +3630,18 @@ app.use(['/api', '/portal'], (req: Request, res: Response, next: NextFunction) =
 });
 
 // Branches
-app.get('/api/v1/branches', (_req, res) => {
-  return sendSuccess(res, branches);
+app.get('/api/v1/branches', (req, res) => {
+  const activeOnly = req.query.activeOnly === 'true';
+  const list = activeOnly ? branches.filter((b) => b.isActive !== false) : branches;
+  return sendSuccess(res, list, { total: list.length });
+});
+
+app.get('/api/v1/branches/:id', (req, res) => {
+  const branch = branches.find((b) => b.id === req.params.id);
+  if (!branch) {
+    return sendError(res, 404, 'NOT_FOUND', 'Branch not found');
+  }
+  return sendSuccess(res, branch);
 });
 
 // -------------------------------------------------------------
@@ -3696,9 +3713,9 @@ function resolvePatientRecord(id: string): Patient {
         gender: ((matchedApt as any).patient_summary?.gender as any) || 'female',
         age: (matchedApt as any).patient_summary?.approximate_age || 28,
         bloodGroup: ((matchedApt as any).patient_summary?.blood_group as any) || 'B+',
-        address: 'House 42, Road 7, Dhanmondi, Dhaka',
-        city: 'Dhaka',
-        branchId: matchedApt.branch_id || 'br-dhanmondi',
+        address: (matchedApt as any).patient_address || '',
+        city: '',
+        branchId: matchedApt.branch_id || resolvePrototypeBranch().id,
         allergies: [],
         medicalHistory: matchedApt.notes || 'Routine consultation and assessment',
         skinType: 'combination',
@@ -3723,9 +3740,9 @@ function resolvePatientRecord(id: string): Patient {
       gender: 'female',
       age: 28,
       bloodGroup: 'B+',
-      address: 'House 42, Road 7, Dhanmondi, Dhaka',
-      city: 'Dhaka',
-      branchId: localApt.branchId || 'br-dhanmondi',
+      address: '',
+      city: '',
+      branchId: localApt.branchId || resolvePrototypeBranch().id,
       allergies: [],
       medicalHistory: localApt.notes || 'Routine consultation and assessment',
       skinType: 'combination',
@@ -3745,9 +3762,9 @@ function resolvePatientRecord(id: string): Patient {
     gender: 'female',
     age: 30,
     bloodGroup: 'B+',
-    address: 'Dhanmondi, Dhaka',
-    city: 'Dhaka',
-    branchId: 'br-dhanmondi',
+    address: '',
+    city: '',
+    branchId: resolvePrototypeBranch().id,
     allergies: [],
     medicalHistory: 'Clinical record loaded.',
     skinType: 'combination',
@@ -3779,7 +3796,7 @@ app.get('/api/v1/patients/:id', (req, res) => {
         patientName: a.patient_name,
         patientPhone: a.patient_mobile,
         branchId: a.branch_id,
-        branchName: a.branch_name || 'Dhanmondi Main Center',
+        branchName: a.branch_name || resolvePrototypeBranch(a.branch_id).name,
         doctorId: a.provider_id,
         doctorName: a.provider_name,
         serviceCategory: a.service_category || 'Facial Aesthetics',
@@ -3830,8 +3847,8 @@ app.post('/api/v1/patients', (req, res) => {
     age: z.number().min(1).max(120).optional(),
     bloodGroup: z.string().optional(),
     address: z.string().optional(),
-    city: z.string().default('Dhaka'),
-    branchId: z.string().default('br-dhanmondi'),
+    city: z.string().default(''),
+    branchId: z.string().default(resolvePrototypeBranch().id),
     allergies: z.array(z.string()).optional(),
     medicalHistory: z.string().optional(),
     skinType: z.enum(['normal', 'dry', 'oily', 'combination', 'sensitive']).optional(),
@@ -3996,7 +4013,7 @@ function updatePatientHandler(req: Request, res: Response) {
   patientService.upsertPatient({
     id: updatedPatient.id,
     patient_code: updatedPatient.patientIdCode,
-    branch_id: updatedPatient.branchId || 'br-dhanmondi',
+    branch_id: updatedPatient.branchId || resolvePrototypeBranch().id,
     full_name: updatedPatient.name,
     full_name_bn: updatedPatient.nameBn,
     gender: updatedPatient.gender as any,
@@ -4081,11 +4098,11 @@ app.get('/api/v1/appointments', (req, res) => {
       patientPhone: a.patient_mobile || a.patientPhone || pt?.phone || '',
       patientAge: pt?.age || a.patient_summary?.approximate_age || 28,
       patientGender: pt?.gender || a.patient_summary?.gender || 'female',
-      patientAddress: pt?.address || (pt?.city ? `${pt.city}` : 'Dhanmondi, Dhaka'),
+      patientAddress: pt?.address || (pt?.city ? `${pt.city}` : ''),
       patientBloodGroup: pt?.bloodGroup || a.patient_summary?.blood_group || 'B+',
       diseaseName: parsedDisease || 'Acne Vulgaris',
       bookingMethod: parsedMethod || 'Phone GP',
-      branchName: a.branch_name || a.branchName || (a.branch_id === 'br-uttara' ? 'Uttara Branch' : 'Dhanmondi Main Center'),
+      branchName: a.branch_name || a.branchName || resolvePrototypeBranch(a.branch_id).name,
       doctorName: a.provider_name || a.doctorName || 'Dr. Nusrat Jahan',
       appointmentDate: a.appointment_date || a.appointmentDate,
       appointmentTime: a.start_time || a.appointmentTime,
@@ -4119,7 +4136,7 @@ app.get(['/api/v1/calendar', '/calendar'], (req, res) => {
   const to = req.query.to as string;
   const providerId = req.query.providerId as string | undefined;
   const resourceId = req.query.resourceId as string | undefined;
-  const branchId = (req.query.branchId as string) || 'br-dhanmondi';
+  const branchId = (req.query.branchId as string) || resolvePrototypeBranch().id;
 
   if (!from || !to) {
     return sendError(res, 400, 'BAD_REQUEST', 'Both "from" and "to" parameters are required');
@@ -4375,7 +4392,8 @@ app.post('/api/v1/appointments', checkIdempotency, async (req, res) => {
     const raw = req.body;
     const patientId = raw.patient_id || raw.patientId;
     const providerId = raw.provider_id || raw.doctorId || 'usr-101';
-    const branchId = raw.branch_id || raw.branchId || 'br-dhanmondi';
+    const branch = resolvePrototypeBranch(raw.branch_id || raw.branchId);
+    const branchId = branch.id;
     const serviceName = raw.service_name || raw.serviceName || 'General Consultation';
     const appointmentDate = raw.appointment_date || raw.appointmentDate;
     const startTime = raw.start_time || raw.appointmentTime;
@@ -4460,9 +4478,9 @@ app.post('/api/v1/appointments', checkIdempotency, async (req, res) => {
     (newApt as any).patientPhone = newApt.patient_mobile || resolvedPt?.phone || '';
     (newApt as any).patientAge = resolvedPt?.age || 28;
     (newApt as any).patientGender = resolvedPt?.gender || 'female';
-    (newApt as any).patientAddress = resolvedPt?.address || resolvedPt?.city || 'Dhaka';
+    (newApt as any).patientAddress = resolvedPt?.address || resolvedPt?.city || '';
     (newApt as any).patientBloodGroup = resolvedPt?.bloodGroup || 'B+';
-    (newApt as any).branchName = (newApt as any).branch_name || (newApt.branch_id === 'br-uttara' ? 'Uttara Branch' : 'Dhanmondi Main Center');
+    (newApt as any).branchName = (newApt as any).branch_name || branch.name;
     (newApt as any).doctorName = newApt.provider_name || 'Dr. Nusrat Jahan';
     (newApt as any).appointmentDate = newApt.appointment_date;
     (newApt as any).appointmentTime = newApt.start_time;
@@ -5309,14 +5327,15 @@ app.post('/api/v1/packages', (req, res) => {
   let linkedInvoice = invoices.find((inv) => inv.id === invId);
 
   if (!linkedInvoice) {
+    const pkgBranch = resolvePrototypeBranch(currentUser.branchId);
     const invNumber = `INV-2026-${(600 + invoices.length + 1).toString().padStart(4, '0')}`;
     linkedInvoice = {
       id: invId,
       invoiceNumber: invNumber,
       patientId,
       patientName,
-      branchId: 'br-dhanmondi',
-      branchName: 'Dhanmondi Main Center',
+      branchId: pkgBranch.id,
+      branchName: pkgBranch.name,
       items: [
         {
           id: `it-${Date.now()}`,
@@ -5404,14 +5423,15 @@ app.post('/api/v1/packages/:id/payments', checkIdempotency, (req, res) => {
   // Find or create linked invoice
   let invoice = invoices.find((inv) => inv.id === pkg.invoiceId || inv.invoiceNumber === pkg.invoiceId);
   if (!invoice) {
+    const pkgBranch = resolvePrototypeBranch(currentUser.branchId);
     const invNumber = `INV-2026-${(600 + invoices.length + 1).toString().padStart(4, '0')}`;
     invoice = {
       id: pkg.invoiceId || `inv-${Date.now().toString().slice(-4)}`,
       invoiceNumber: invNumber,
       patientId: pkg.patientId,
       patientName: pkg.patientName,
-      branchId: 'br-dhanmondi',
-      branchName: 'Dhanmondi Main Center',
+      branchId: pkgBranch.id,
+      branchName: pkgBranch.name,
       items: [
         {
           id: `it-${Date.now()}`,
@@ -5626,7 +5646,7 @@ app.get('/api/v1/invoices', (req, res) => {
 app.post('/api/v1/invoices', checkIdempotency, (req, res) => {
   const schema = z.object({
     patientId: z.string(),
-    branchId: z.string().default('br-dhanmondi'),
+    branchId: z.string().default(resolvePrototypeBranch(currentUser.branchId).id),
     items: z
       .array(
         z.object({
@@ -5876,8 +5896,8 @@ app.post('/api/v1/inventory', (req, res) => {
     sku: z.string().optional(),
     description: z.string().optional(),
     usageProtocol: z.string().optional(),
-    branchId: z.string().default('br-dhanmondi'),
-    branchName: z.string().default('Dhanmondi Main Center'),
+    branchId: z.string().optional(),
+    branchName: z.string().optional(),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -5886,6 +5906,7 @@ app.post('/api/v1/inventory', (req, res) => {
   }
 
   const d = parsed.data;
+  const targetBranch = resolvePrototypeBranch(d.branchId || currentUser.branchId);
   const newId = `inv-item-${Date.now()}`;
   const codeSeq = (inventoryItems.length + 1).toString().padStart(3, '0');
   const catPrefix = d.category.slice(0, 3).toUpperCase();
@@ -5918,8 +5939,8 @@ app.post('/api/v1/inventory', (req, res) => {
       }
     ],
     usageProtocol: d.usageProtocol,
-    branchId: d.branchId,
-    branchName: d.branchName,
+    branchId: targetBranch.id,
+    branchName: d.branchName || targetBranch.name,
     status: d.currentStock <= d.reorderLevel ? 'low_stock' : 'in_stock',
     isActive: true,
   };
@@ -6369,7 +6390,7 @@ let smsLogs: SmsLogRecord[] = [
     id: 'sms-log-01',
     recipientPhone: '+8801712345678',
     recipientName: 'Sumaiya Rahman',
-    messageContent: 'Dear Sumaiya Rahman, your appointment with Dr. Nusrat Jahan is confirmed on 21 Oct 2026 at 4:30 PM (Dhanmondi Main Center). Token #01. Helpline: +8801711223344. - SUOXI Skin Care',
+    messageContent: 'Dear Sumaiya Rahman, your appointment with Dr. Nusrat Jahan is confirmed on 21 Oct 2026 at 4:30 PM (Shantinagar). Token #01. Helpline: +8801711223344. - SUOXI Skin Care',
     messageType: 'text',
     label: 'transactional',
     senderId: 'SUOXI',
@@ -6417,7 +6438,7 @@ let smsLogs: SmsLogRecord[] = [
     id: 'sms-log-04',
     recipientPhone: '+8801314113022',
     recipientName: 'Ahad',
-    messageContent: 'Dear Ahad, your appointment with Dr. Nusrat Jahan is confirmed on 04 Nov 2026 at 10:04 AM (Dhanmondi Main Center). Token #08. Helpline: +8801711223344. - SUOXI Skin Care',
+    messageContent: 'Dear Ahad, your appointment with Dr. Nusrat Jahan is confirmed on 04 Nov 2026 at 10:04 AM (Shantinagar). Token #08. Helpline: +8801711223344. - SUOXI Skin Care',
     messageType: 'text',
     label: 'transactional',
     senderId: 'SUOXI',
@@ -6473,10 +6494,10 @@ let emailTemplates: EmailTemplate[] = [
           <div style="text-align: center; margin: 24px 0;">
             <a href="{{download_link}}" style="background: #0DA54F; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block;">Download Official Prescription (PDF)</a>
           </div>
-          <p style="font-size: 12px; color: #64748b; line-height: 1.5;">Please follow the daily post-procedure skincare regimen and adhere to sunscreen application instructions. For any queries, contact our Dhanmondi or Gulshan lounge.</p>
+          <p style="font-size: 12px; color: #64748b; line-height: 1.5;">Please follow the daily post-procedure skincare regimen and adhere to sunscreen application instructions. For any queries, contact your SUOXI clinic branch.</p>
         </div>
         <div style="background: #f1f5f9; padding: 16px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
-          SUOXI Aesthetic Care • House 42, Road 9/A, Dhanmondi, Dhaka • Hotline: +8801711223344
+          SUOXI Skin Care & Aesthetic Center • Hotline: +8801711223344
         </div>
       </div>
     `,
@@ -7359,30 +7380,36 @@ app.get('/api/v1/users-security-logs', (req, res) => {
 
 // 1. Branch Management CRUD
 app.post('/api/v1/branches', (req, res) => {
-  const { name, nameBn, code, address, city, phone, email, managerName, managerPhone, operatingHours } = req.body || {};
-  if (!name || !code || !phone) {
-    return sendError(res, 400, 'BAD_REQUEST', 'Branch name, code, and phone are required');
+  const { id, name, nameBn, code, address, city, phone, email, managerName, managerPhone, operatingHours, isActive } =
+    req.body || {};
+  const trimmedName = typeof name === 'string' ? name.trim() : '';
+  const normalizedCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
+  if (!trimmedName || !normalizedCode) {
+    return sendError(res, 400, 'BAD_REQUEST', 'Branch name and code are required');
   }
 
-  const existing = branches.find((b) => b.code.toUpperCase() === code.toUpperCase());
+  const branchId = typeof id === 'string' && id.trim() ? id.trim() : `br-${normalizedCode.toLowerCase()}`;
+  const existing = branches.find((b) => b.code.toUpperCase() === normalizedCode || b.id === branchId);
   if (existing) {
-    return sendError(res, 400, 'DUPLICATE_CODE', 'A branch with this code already exists');
+    return sendError(res, 409, 'DUPLICATE_CODE', 'A branch with this ID or code already exists');
   }
 
+  const now = new Date().toISOString();
   const newBranch: Branch = {
-    id: `br-${code.toLowerCase()}`,
-    name,
-    nameBn: nameBn || name,
-    code: code.toUpperCase(),
-    address: address || '',
-    city: city || 'Dhaka',
-    phone,
-    email,
-    managerName,
-    managerPhone,
-    operatingHours: operatingHours || '09:00 AM - 08:00 PM (Sat - Thu)',
-    isActive: true,
-    createdAt: new Date().toISOString(),
+    id: branchId,
+    name: trimmedName,
+    nameBn: typeof nameBn === 'string' && nameBn.trim() ? nameBn.trim() : '',
+    code: normalizedCode,
+    address: typeof address === 'string' ? address.trim() : '',
+    city: typeof city === 'string' ? city.trim() : '',
+    phone: typeof phone === 'string' ? phone.trim() : '',
+    email: typeof email === 'string' && email.trim() ? email.trim() : undefined,
+    managerName: typeof managerName === 'string' && managerName.trim() ? managerName.trim() : undefined,
+    managerPhone: typeof managerPhone === 'string' && managerPhone.trim() ? managerPhone.trim() : undefined,
+    operatingHours: typeof operatingHours === 'string' && operatingHours.trim() ? operatingHours.trim() : undefined,
+    isActive: typeof isActive === 'boolean' ? isActive : true,
+    createdAt: now,
+    updatedAt: now,
   };
 
   branches.push(newBranch);
@@ -7391,15 +7418,78 @@ app.post('/api/v1/branches', (req, res) => {
   return sendSuccess(res, newBranch, {}, 201);
 });
 
-app.put('/api/v1/branches/:id', (req, res) => {
+function handlePrototypeBranchUpdate(req: Request, res: Response) {
   const branch = branches.find((b) => b.id === req.params.id);
   if (!branch) {
     return sendError(res, 404, 'NOT_FOUND', 'Branch not found');
   }
 
-  Object.assign(branch, req.body);
-  logAuditEvent('BRANCH_UPDATED', 'branch', branch.id, `Updated branch details for ${branch.name}`);
+  const patch = (req.body || {}) as Record<string, unknown>;
+  if (typeof patch.code === 'string' && patch.code.trim()) {
+    const normalizedCode = patch.code.trim().toUpperCase();
+    const conflict = branches.find((b) => b.id !== branch.id && b.code.toUpperCase() === normalizedCode);
+    if (conflict) {
+      return sendError(res, 409, 'DUPLICATE_CODE', `Branch code '${normalizedCode}' is already in use.`);
+    }
+    branch.code = normalizedCode;
+  }
+  if (typeof patch.name === 'string' && patch.name.trim()) branch.name = patch.name.trim();
+  if (patch.nameBn !== undefined) branch.nameBn = typeof patch.nameBn === 'string' ? patch.nameBn.trim() : '';
+  if (patch.address !== undefined) branch.address = typeof patch.address === 'string' ? patch.address.trim() : '';
+  if (patch.city !== undefined) branch.city = typeof patch.city === 'string' ? patch.city.trim() : '';
+  if (patch.phone !== undefined) branch.phone = typeof patch.phone === 'string' ? patch.phone.trim() : '';
+  if (patch.email !== undefined) branch.email = typeof patch.email === 'string' && patch.email.trim() ? patch.email.trim() : undefined;
+  if (patch.managerName !== undefined) branch.managerName = typeof patch.managerName === 'string' && patch.managerName.trim() ? patch.managerName.trim() : undefined;
+  if (patch.managerPhone !== undefined) branch.managerPhone = typeof patch.managerPhone === 'string' && patch.managerPhone.trim() ? patch.managerPhone.trim() : undefined;
+  if (patch.operatingHours !== undefined) branch.operatingHours = typeof patch.operatingHours === 'string' && patch.operatingHours.trim() ? patch.operatingHours.trim() : undefined;
+  if (typeof patch.isActive === 'boolean') branch.isActive = patch.isActive;
+  branch.updatedAt = new Date().toISOString();
 
+  for (const user of staffUsers) {
+    if (user.branchId === branch.id) {
+      user.branchName = branch.name;
+    }
+  }
+  for (const r of staffRosters) {
+    if (r.branchId === branch.id) {
+      r.branchName = branch.name;
+    }
+  }
+
+  logAuditEvent('BRANCH_UPDATED', 'branch', branch.id, `Updated branch details for ${branch.name}`);
+  return sendSuccess(res, branch);
+}
+
+app.put('/api/v1/branches/:id', handlePrototypeBranchUpdate);
+app.patch('/api/v1/branches/:id', handlePrototypeBranchUpdate);
+
+app.post('/api/v1/branches/:id/activate', (req, res) => {
+  const branch = branches.find((b) => b.id === req.params.id);
+  if (!branch) return sendError(res, 404, 'NOT_FOUND', 'Branch not found');
+  branch.isActive = true;
+  branch.updatedAt = new Date().toISOString();
+  logAuditEvent('BRANCH_ACTIVATED', 'branch', branch.id, `Branch ${branch.name} activated`);
+  return sendSuccess(res, branch);
+});
+
+app.post('/api/v1/branches/:id/deactivate', (req, res) => {
+  const branch = branches.find((b) => b.id === req.params.id);
+  if (!branch) return sendError(res, 404, 'NOT_FOUND', 'Branch not found');
+  branch.isActive = false;
+  branch.updatedAt = new Date().toISOString();
+  logAuditEvent('BRANCH_DEACTIVATED', 'branch', branch.id, `Branch ${branch.name} deactivated`);
+  return sendSuccess(res, branch);
+});
+
+app.patch('/api/v1/branches/:id/status', (req, res) => {
+  const branch = branches.find((b) => b.id === req.params.id);
+  if (!branch) return sendError(res, 404, 'NOT_FOUND', 'Branch not found');
+  if (typeof req.body?.isActive !== 'boolean') {
+    return sendError(res, 400, 'BAD_REQUEST', 'Boolean isActive is required');
+  }
+  branch.isActive = req.body.isActive;
+  branch.updatedAt = new Date().toISOString();
+  logAuditEvent('BRANCH_STATUS_UPDATED', 'branch', branch.id, `Branch ${branch.name} status changed to ${branch.isActive ? 'ACTIVE' : 'INACTIVE'}`);
   return sendSuccess(res, branch);
 });
 
@@ -7410,6 +7500,7 @@ app.post('/api/v1/branches/:id/toggle-status', (req, res) => {
   }
 
   branch.isActive = !branch.isActive;
+  branch.updatedAt = new Date().toISOString();
   logAuditEvent('BRANCH_STATUS_TOGGLED', 'branch', branch.id, `Branch ${branch.name} status changed to ${branch.isActive ? 'ACTIVE' : 'INACTIVE'}`);
 
   return sendSuccess(res, branch);
@@ -7590,8 +7681,9 @@ async function start() {
   // Central catch-all error handling middleware
   app.use(errorHandlerMiddleware as unknown as express.ErrorRequestHandler);
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SUOXI CRM] Server started on http://0.0.0.0:${PORT}`);
+  const HOST = process.env.HOST || '127.0.0.1';
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`[SUOXI CRM] Server started on http://${HOST}:${PORT}`);
     if (typeof process.send === 'function') {
       process.send('ready');
     }

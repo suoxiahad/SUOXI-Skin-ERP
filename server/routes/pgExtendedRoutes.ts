@@ -53,7 +53,7 @@ import {
   pgStartTreatmentSession,
   pgUpsertPatientMedicalHistory,
 } from '../repositories/pgClinicalSessionsRepo.ts';
-import { extractClientIp, sendPgError, sendPgSuccess } from '../repositories/pgHelpers.ts';
+import { extractClientIp, pgResolveBranch, sendPgError, sendPgSuccess } from '../repositories/pgHelpers.ts';
 import {
   pgCreateStaffAlert,
   pgEnqueueNotification,
@@ -333,10 +333,15 @@ export function createPgExtendedRouter(deps: PgExtendedRouterDeps): express.Rout
 
   router.get('/api/v1/appointments/availability', async (req, res) => {
     try {
-      const branchId = String(req.query.branchId || actorOf(req).branchId || 'br-dhanmondi');
+      const requestedBranchId = req.query.branchId ? String(req.query.branchId) : actorOf(req).branchId;
+      const resolvedBranch = await pgResolveBranch(requestedBranchId);
+      const branchId = resolvedBranch?.id || '';
+      if (!branchId) {
+        return sendPgSuccess(res, []);
+      }
       const allowed = await canUserAccessBranch(actorOf(req), branchId);
       if (!allowed) return sendPgError(res, 403, 'FORBIDDEN', 'Cross-branch availability access denied');
-      const doctorId = String(req.query.doctorId || '');
+      const doctorId = String(req.query.date ? req.query.doctorId || '' : req.query.doctorId || '');
       const date = String(req.query.date || new Date().toISOString().slice(0, 10));
       if (!doctorId) return sendPgError(res, 400, 'VALIDATION_ERROR', 'doctorId query param is required');
       return sendPgSuccess(res, await pgGetSlotAvailability({ branchId, doctorId, date }));

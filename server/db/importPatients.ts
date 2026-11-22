@@ -15,38 +15,12 @@ import { closePgPool, isPostgresConfigured, withPgTransaction } from './pgPool.t
 
 const PATIENTS_FILE = path.resolve(process.cwd(), 'storage', 'patients.json');
 
-const DEFAULT_BRANCHES = [
-  {
-    id: 'br-dhanmondi',
-    code: 'DHN',
-    name: 'Dhanmondi Main Center',
-    nameBn: 'ধানমন্ডি মেইন সেন্টার',
-    address: 'House 42, Road 9/A, Dhanmondi, Dhaka-1209',
-    city: 'Dhaka',
-    phone: '+88029671122',
-    email: 'dhanmondi@suoxiclinic.com',
-  },
-  {
-    id: 'br-gulshan',
-    code: 'GLS',
-    name: 'Gulshan-2 Aesthetic Lounge',
-    nameBn: 'গুলশান-২ এস্থেটিক লাউঞ্জ',
-    address: 'Plot 18, Road 71, Gulshan-2, Dhaka-1212',
-    city: 'Dhaka',
-    phone: '+88029883344',
-    email: 'gulshan@suoxiclinic.com',
-  },
-  {
-    id: 'br-uttara',
-    code: 'UTR',
-    name: 'Uttara Sector-3 Clinic',
-    nameBn: 'উত্তরা সেক্টর-৩ ক্লিনিক',
-    address: 'House 12, Road 7, Sector 3, Uttara, Dhaka-1230',
-    city: 'Dhaka',
-    phone: '+88028951100',
-    email: 'uttara@suoxiclinic.com',
-  },
-];
+const INITIAL_BRANCH = {
+  id: 'br-shantinagar',
+  code: 'SHN',
+  name: 'Shantinagar',
+  nameBn: 'শান্তিনগর',
+};
 
 async function run(): Promise<void> {
   const dryRun = process.argv.includes('--dry-run');
@@ -79,21 +53,34 @@ async function run(): Promise<void> {
   }
 
   await withPgTransaction(async (client) => {
-    // Ensure default branches exist so foreign keys always resolve cleanly
-    for (const br of DEFAULT_BRANCHES) {
+    const existingBranches = await client.query<{ id: string }>(
+      'SELECT id FROM branches ORDER BY is_active DESC, created_at ASC LIMIT 1'
+    );
+    let fallbackBranchId = existingBranches.rows[0]?.id;
+    if (!fallbackBranchId) {
       await client.query(
         `
         INSERT INTO branches (id, code, name, name_bn, address, city, phone, email, is_active)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
+        VALUES ($1, $2, $3, $4, '', '', '', NULL, TRUE)
         ON CONFLICT (id) DO NOTHING
         `,
-        [br.id, br.code, br.name, br.nameBn, br.address, br.city, br.phone, br.email]
+        [INITIAL_BRANCH.id, INITIAL_BRANCH.code, INITIAL_BRANCH.name, INITIAL_BRANCH.nameBn]
       );
+      fallbackBranchId = INITIAL_BRANCH.id;
     }
 
     let imported = 0;
     for (const p of patients) {
-      const branchId = p.branchId || 'br-dhanmondi';
+      const requestedBranchId = p.branchId;
+      let branchId = fallbackBranchId;
+      if (requestedBranchId) {
+        const brCheck = await client.query<{ id: string }>('SELECT id FROM branches WHERE id = $1 LIMIT 1', [
+          requestedBranchId,
+        ]);
+        if (brCheck.rows[0]?.id) {
+          branchId = brCheck.rows[0].id;
+        }
+      }
       await client.query(
         `
         INSERT INTO patients (
@@ -141,7 +128,7 @@ async function run(): Promise<void> {
           p.age ?? null,
           p.bloodGroup ?? null,
           p.address ?? null,
-          p.city || 'Dhaka',
+          p.city ?? null,
           branchId,
           JSON.stringify(Array.isArray(p.allergies) ? p.allergies : []),
           p.medicalHistory ?? null,

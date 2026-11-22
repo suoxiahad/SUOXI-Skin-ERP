@@ -65,7 +65,7 @@ export const DEFAULT_GENERAL_SETTINGS: ClinicGeneralSettings = {
   supportEmail: 'care@suoxiclinic.com',
   invoicePrefix: 'INV-2026',
   posFooterNotes: 'Thank you for trusting SUOXI Clinical Dermatology. Prescriptions & package credits are non-transferable.',
-  primaryAddress: 'House 42, Road 9/A, Dhanmondi, Dhaka-1209',
+  primaryAddress: '',
 };
 
 export const DEFAULT_SCHEDULING_SETTINGS: ClinicSchedulingSettings = {

@@ -42,6 +42,7 @@ export interface User {
 
 export interface Branch {
   id: string;
+  organizationId?: string;
   name: string;
   nameBn: string;
   code: string;
@@ -54,6 +55,7 @@ export interface Branch {
   operatingHours?: string;
   isActive?: boolean;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export type AppointmentStatus =

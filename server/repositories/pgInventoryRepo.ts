@@ -19,6 +19,7 @@ import type {
 import { pgQuery, withPgTransaction } from '../db/pgPool.ts';
 import {
   pgLogAuditEvent,
+  pgRequireBranch,
   toDateOnly,
   toIsoString,
   toNumber,
@@ -206,13 +207,17 @@ export const pgInventoryRepo = {
       sku?: string;
       description?: string;
       usageProtocol?: string;
-      branchId: string;
-      branchName: string;
+      branchId?: string;
+      branchName?: string;
     },
     actor: User,
     ipAddress: string
   ): Promise<InventoryItem> {
     return withPgTransaction(async (client) => {
+      const branch = await pgRequireBranch(input.branchId || actor.branchId, client);
+      const branchId = branch.id;
+      const branchName = branch.name;
+
       const countRes = await client.query<{ cnt: string }>('SELECT COUNT(*)::text AS cnt FROM inventory_items');
       const seq = String(Number(countRes.rows[0]?.cnt || 0) + 1).padStart(3, '0');
       const catPrefix = input.category.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase() || 'GEN';
@@ -221,12 +226,6 @@ export const pgInventoryRepo = {
       const barcode = input.barcode || `890123${crypto.randomInt(1000, 9999)}`;
       const sku = input.sku || `${input.brand.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase() || 'PRD'}-${seq}`;
       const status = computeInventoryStatus(input.currentStock, input.reorderLevel, input.expiryDate);
-
-      let branchName = input.branchName;
-      const brRes = await client.query<{ name: string }>('SELECT name FROM branches WHERE id = $1', [input.branchId]);
-      if (brRes.rows[0]?.name) {
-        branchName = brRes.rows[0].name;
-      }
 
       const initialBatches: ProductBatch[] = [
         {
@@ -271,7 +270,7 @@ export const pgInventoryRepo = {
           input.expiryDate || null,
           JSON.stringify(initialBatches),
           input.usageProtocol || null,
-          input.branchId,
+          branchId,
           branchName,
           status,
         ]
@@ -291,7 +290,7 @@ export const pgInventoryRepo = {
           ON CONFLICT (branch_id, inventory_item_id, batch_number) DO UPDATE
           SET quantity_on_hand = EXCLUDED.quantity_on_hand, updated_at = NOW()
           `,
-          [batchId, created.id, input.branchId, input.batchNumber, input.expiryDate || null, input.unitCostBDT, input.currentStock]
+          [batchId, created.id, branchId, input.batchNumber, input.expiryDate || null, input.unitCostBDT, input.currentStock]
         );
       }
 
@@ -306,7 +305,7 @@ export const pgInventoryRepo = {
           `,
           [
             `smv-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
-            input.branchId,
+            branchId,
             created.id,
             input.batchNumber || null,
             input.currentStock,

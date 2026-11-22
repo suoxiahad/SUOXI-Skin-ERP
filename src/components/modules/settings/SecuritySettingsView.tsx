@@ -44,7 +44,7 @@ import type {
 } from '../../../types/index.ts';
 
 export const SecuritySettingsView: React.FC = () => {
-  const { currentView, navigate, language, addToast } = useApp();
+  const { currentView, navigate, language, addToast, refreshBranches } = useApp();
   const isBn = language === 'bn';
 
   // Active Sub-tab derived from currentView
@@ -89,16 +89,18 @@ export const SecuritySettingsView: React.FC = () => {
   const [isBranchModalOpen, setIsBranchModalOpen] = useState(false);
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
   const [branchFormData, setBranchFormData] = useState({
+    id: '',
     name: '',
     nameBn: '',
     code: '',
     phone: '',
     email: '',
     address: '',
-    city: 'Dhaka',
+    city: '',
     managerName: '',
     managerPhone: '',
-    operatingHours: '09:00 AM - 08:30 PM (Sat - Thu)',
+    operatingHours: '',
+    isActive: true,
   });
 
   const [isSavingGeneral, setIsSavingGeneral] = useState(false);
@@ -215,27 +217,44 @@ export const SecuritySettingsView: React.FC = () => {
   // Handle Branch Form Submit (Add or Edit)
   const handleSaveBranch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!branchFormData.name || !branchFormData.code || !branchFormData.phone) {
+    if (!branchFormData.name.trim() || !branchFormData.code.trim()) {
       addToast({
         type: 'warning',
         title: isBn ? 'তথ্য অসম্পূর্ণ' : 'Incomplete Form',
-        description: 'Branch name, code and phone are required',
+        description: 'Branch name (English) and branch code are required',
       });
       return;
     }
 
+    const payload: Partial<Branch> = {
+      ...(editingBranch ? {} : branchFormData.id.trim() ? { id: branchFormData.id.trim() } : {}),
+      name: branchFormData.name.trim(),
+      nameBn: branchFormData.nameBn.trim(),
+      code: branchFormData.code.trim().toUpperCase(),
+      address: branchFormData.address.trim(),
+      city: branchFormData.city.trim(),
+      phone: branchFormData.phone.trim(),
+      email: branchFormData.email.trim() || undefined,
+      managerName: branchFormData.managerName.trim() || undefined,
+      managerPhone: branchFormData.managerPhone.trim() || undefined,
+      operatingHours: branchFormData.operatingHours.trim() || undefined,
+      isActive: branchFormData.isActive,
+    };
+
     try {
       if (editingBranch) {
-        const updated = await api.branches.update(editingBranch.id, branchFormData);
+        const updated = await api.branches.update(editingBranch.id, payload);
         setBranches((prev) => prev.map((b) => (b.id === editingBranch.id ? updated : b)));
+        await refreshBranches().catch(() => undefined);
         addToast({
           type: 'success',
           title: isBn ? 'ব্রাঞ্চ আপডেট সফল' : 'Branch Updated',
           description: `${updated.name} updated successfully`,
         });
       } else {
-        const created = await api.branches.create(branchFormData);
+        const created = await api.branches.create(payload);
         setBranches((prev) => [...prev, created]);
+        await refreshBranches().catch(() => undefined);
         addToast({
           type: 'success',
           title: isBn ? 'নতুন ব্রাঞ্চ যুক্ত হয়েছে' : 'Branch Registered',
@@ -253,20 +272,24 @@ export const SecuritySettingsView: React.FC = () => {
     }
   };
 
-  // Toggle Branch Status
+  // Activate / Deactivate Branch Status
   const handleToggleBranchStatus = async (branch: Branch) => {
     try {
-      const updated = await api.branches.toggleStatus(branch.id);
+      const updated =
+        branch.isActive !== false
+          ? await api.branches.deactivate(branch.id)
+          : await api.branches.activate(branch.id);
       setBranches((prev) => prev.map((b) => (b.id === branch.id ? updated : b)));
+      await refreshBranches().catch(() => undefined);
       addToast({
         type: 'success',
         title: isBn ? 'স্ট্যাটাস পরিবর্তিত' : 'Branch Status Updated',
-        description: `${branch.name} is now ${updated.isActive ? 'ACTIVE' : 'INACTIVE'}`,
+        description: `${branch.name} is now ${updated.isActive !== false ? 'ACTIVE' : 'INACTIVE'}`,
       });
     } catch (err: any) {
       addToast({
         type: 'error',
-        title: isBn ? 'ব্যর্থ হয়েছে' : 'Failed to toggle status',
+        title: isBn ? 'ব্যর্থ হয়েছে' : 'Failed to update branch status',
         description: err.message,
       });
     }
@@ -276,16 +299,18 @@ export const SecuritySettingsView: React.FC = () => {
   const openEditBranchModal = (b: Branch) => {
     setEditingBranch(b);
     setBranchFormData({
+      id: b.id,
       name: b.name,
       nameBn: b.nameBn || '',
       code: b.code,
-      phone: b.phone,
+      phone: b.phone || '',
       email: b.email || '',
-      address: b.address,
-      city: b.city,
+      address: b.address || '',
+      city: b.city || '',
       managerName: b.managerName || '',
       managerPhone: b.managerPhone || '',
-      operatingHours: b.operatingHours || '09:00 AM - 08:30 PM (Sat - Thu)',
+      operatingHours: b.operatingHours || '',
+      isActive: b.isActive !== false,
     });
     setIsBranchModalOpen(true);
   };
@@ -294,16 +319,18 @@ export const SecuritySettingsView: React.FC = () => {
   const openAddBranchModal = () => {
     setEditingBranch(null);
     setBranchFormData({
+      id: '',
       name: '',
       nameBn: '',
       code: '',
-      phone: '+880',
+      phone: '',
       email: '',
       address: '',
-      city: 'Dhaka',
+      city: '',
       managerName: '',
       managerPhone: '',
-      operatingHours: '09:00 AM - 08:30 PM (Sat - Thu)',
+      operatingHours: '',
+      isActive: true,
     });
     setIsBranchModalOpen(true);
   };
@@ -462,8 +489,10 @@ export const SecuritySettingsView: React.FC = () => {
               <span className="text-xs font-normal text-slate-400 ml-1.5">/ {branches.length} centers</span>
             </h3>
             <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span>Dhanmondi, Gulshan & Uttara</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+              <span className="truncate">
+                {branches.filter((b) => b.isActive !== false).map((b) => b.name).join(', ') || 'No active branches'}
+              </span>
             </p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -571,7 +600,7 @@ export const SecuritySettingsView: React.FC = () => {
                   <span>Clinic Branch Centers Network</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Manage clinical branches, addresses, managers, and operating hours across Dhaka
+                  Manage clinic branches, addresses, contact details, and operating hours from PostgreSQL
                 </p>
               </div>
 
@@ -585,76 +614,108 @@ export const SecuritySettingsView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {branches.map((b) => (
-                <div
-                  key={b.id}
-                  className={`p-4 rounded-xl border transition-all ${
-                    b.isActive ? 'border-slate-200 bg-white hover:border-blue-300' : 'border-slate-200 bg-slate-50 opacity-60'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-slate-900">{b.name}</span>
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm bg-blue-100 text-blue-800 font-mono">
-                          {b.code}
-                        </span>
-                      </div>
-                      {b.nameBn && <p className="text-xs text-slate-500 mt-0.5 font-normal">{b.nameBn}</p>}
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openEditBranchModal(b)}
-                        className="p-1 text-slate-400 hover:text-blue-600 rounded-md cursor-pointer"
-                        title="Edit Branch"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleBranchStatus(b)}
-                        className={`p-1 rounded-md cursor-pointer ${
-                          b.isActive ? 'text-slate-400 hover:text-rose-600' : 'text-slate-400 hover:text-emerald-600'
-                        }`}
-                        title={b.isActive ? 'Deactivate Branch' : 'Activate Branch'}
-                      >
-                        <Power className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 text-xs space-y-1.5 text-slate-600 border-t border-slate-100 pt-2.5">
-                    <p className="truncate text-slate-700 font-medium">{b.address}</p>
-                    <p className="font-mono text-slate-800 flex items-center justify-between">
-                      <span className="text-slate-400">Hotline:</span>
-                      <span>{b.phone}</span>
-                    </p>
-                    <p className="flex items-center justify-between">
-                      <span className="text-slate-400">Branch Manager:</span>
-                      <span className="font-semibold text-slate-800">{b.managerName || '—'}</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-1">
-                      <Clock className="w-3 h-3 text-slate-400" />
-                      <span>{b.operatingHours || '09:00 AM - 08:30 PM'}</span>
-                    </p>
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                    <span className="text-slate-400">Status:</span>
-                    <span
-                      className={`font-bold px-2 py-0.5 rounded-full text-[10px] uppercase ${
-                        b.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-600'
+            {branches.length === 0 ? (
+              <div className="p-6 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-500">
+                No branches configured yet. Click &ldquo;Add New Branch&rdquo; to register your first clinic center.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {branches.map((b) => {
+                  const isOperating = b.isActive !== false;
+                  return (
+                    <div
+                      key={b.id}
+                      className={`p-4 rounded-xl border transition-all ${
+                        isOperating ? 'border-slate-200 bg-white hover:border-blue-300' : 'border-slate-200 bg-slate-50 opacity-75'
                       }`}
                     >
-                      {b.isActive ? 'Operating' : 'Inactive'}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm text-slate-900 truncate">{b.name}</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm bg-blue-100 text-blue-800 font-mono">
+                              {b.code}
+                            </span>
+                          </div>
+                          {b.nameBn && <p className="text-xs text-slate-500 mt-0.5 font-normal">{b.nameBn}</p>}
+                          <p className="text-[10px] font-mono text-slate-400 mt-0.5">ID: {b.id}</p>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => openEditBranchModal(b)}
+                            className="p-1 text-slate-400 hover:text-blue-600 rounded-md cursor-pointer"
+                            title="Edit Branch"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleBranchStatus(b)}
+                            className={`px-2 py-1 rounded-md text-[10px] font-semibold cursor-pointer flex items-center gap-1 border ${
+                              isOperating
+                                ? 'border-rose-200 text-rose-600 hover:bg-rose-50'
+                                : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                            }`}
+                            title={isOperating ? 'Deactivate Branch' : 'Activate Branch'}
+                          >
+                            <Power className="w-3 h-3" />
+                            <span>{isOperating ? 'Deactivate' : 'Activate'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 text-xs space-y-1.5 text-slate-600 border-t border-slate-100 pt-2.5">
+                        <p className="flex items-center justify-between gap-2">
+                          <span className="text-slate-400 shrink-0">Address:</span>
+                          <span className="truncate text-slate-700 font-medium text-right">
+                            {b.address || 'Not configured'}
+                          </span>
+                        </p>
+                        <p className="flex items-center justify-between gap-2">
+                          <span className="text-slate-400 shrink-0">City:</span>
+                          <span className="text-slate-700">{b.city || '—'}</span>
+                        </p>
+                        <p className="font-mono text-slate-800 flex items-center justify-between gap-2">
+                          <span className="text-slate-400 font-sans">Phone:</span>
+                          <span>{b.phone || 'Not configured'}</span>
+                        </p>
+                        <p className="flex items-center justify-between gap-2">
+                          <span className="text-slate-400 shrink-0">Email:</span>
+                          <span className="truncate text-slate-700">{b.email || '—'}</span>
+                        </p>
+                        <p className="flex items-center justify-between gap-2">
+                          <span className="text-slate-400 shrink-0">Manager:</span>
+                          <span className="font-semibold text-slate-800 truncate">{b.managerName || '—'}</span>
+                        </p>
+                        <p className="text-[11px] text-slate-500 flex items-center justify-between gap-2 pt-0.5">
+                          <span className="flex items-center gap-1 text-slate-400 shrink-0">
+                            <Clock className="w-3 h-3" />
+                            <span>Hours:</span>
+                          </span>
+                          <span className="truncate text-right">{b.operatingHours || 'Not configured'}</span>
+                        </p>
+                      </div>
+
+                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+                        <span>
+                          Created: {b.createdAt ? new Date(b.createdAt).toLocaleDateString() : '—'}
+                          {b.updatedAt ? ` · Updated: ${new Date(b.updatedAt).toLocaleDateString()}` : ''}
+                        </span>
+                        <span
+                          className={`font-bold px-2 py-0.5 rounded-full text-[10px] uppercase ${
+                            isOperating ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {isOperating ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Clinic Profile & General Billing Form */}
@@ -1423,8 +1484,35 @@ export const SecuritySettingsView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveBranch} className="p-6 space-y-4 text-xs">
+            <form onSubmit={handleSaveBranch} className="p-6 space-y-4 text-xs max-h-[82vh] overflow-y-auto">
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Unique Branch ID</label>
+                  <input
+                    type="text"
+                    disabled={Boolean(editingBranch)}
+                    value={branchFormData.id}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, id: e.target.value.toLowerCase().replace(/\s+/g, '-') })}
+                    placeholder="Auto-generated if blank (e.g. br-shantinagar)"
+                    className={`w-full border border-slate-200 rounded-lg px-3 py-2 font-mono ${
+                      editingBranch ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Branch Code *</label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={12}
+                    value={branchFormData.code}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, code: e.target.value.toUpperCase() })}
+                    placeholder="e.g. SHN"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 font-mono uppercase"
+                  />
+                </div>
+
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Branch Name (English) *</label>
                   <input
@@ -1432,21 +1520,8 @@ export const SecuritySettingsView: React.FC = () => {
                     required
                     value={branchFormData.name}
                     onChange={(e) => setBranchFormData({ ...branchFormData, name: e.target.value })}
-                    placeholder="e.g. Banani Aesthetic Lounge"
+                    placeholder="e.g. Shantinagar"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Branch Code (3 Letters) *</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={5}
-                    value={branchFormData.code}
-                    onChange={(e) => setBranchFormData({ ...branchFormData, code: e.target.value.toUpperCase() })}
-                    placeholder="e.g. BNN"
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 font-mono uppercase"
                   />
                 </div>
 
@@ -1456,30 +1531,51 @@ export const SecuritySettingsView: React.FC = () => {
                     type="text"
                     value={branchFormData.nameBn}
                     onChange={(e) => setBranchFormData({ ...branchFormData, nameBn: e.target.value })}
-                    placeholder="e.g. বনানী নান্দনিক লাউঞ্জ"
+                    placeholder="e.g. শান্তিনগর"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2"
                   />
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Contact Phone *</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Contact Phone</label>
                   <input
                     type="text"
-                    required
                     value={branchFormData.phone}
                     onChange={(e) => setBranchFormData({ ...branchFormData, phone: e.target.value })}
-                    placeholder="+88029XXXXXX"
+                    placeholder="Optional"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 font-mono"
                   />
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">Full Physical Address</label>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Branch Email</label>
+                  <input
+                    type="email"
+                    value={branchFormData.email}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, email: e.target.value })}
+                    placeholder="Optional"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Physical Address</label>
                   <input
                     type="text"
                     value={branchFormData.address}
                     onChange={(e) => setBranchFormData({ ...branchFormData, address: e.target.value })}
-                    placeholder="House, Road, Block, Area, Dhaka"
+                    placeholder="Optional street address"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">City</label>
+                  <input
+                    type="text"
+                    value={branchFormData.city}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, city: e.target.value })}
+                    placeholder="Optional"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2"
                   />
                 </div>
@@ -1490,7 +1586,7 @@ export const SecuritySettingsView: React.FC = () => {
                     type="text"
                     value={branchFormData.managerName}
                     onChange={(e) => setBranchFormData({ ...branchFormData, managerName: e.target.value })}
-                    placeholder="Manager Name"
+                    placeholder="Optional"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2"
                   />
                 </div>
@@ -1501,7 +1597,7 @@ export const SecuritySettingsView: React.FC = () => {
                     type="text"
                     value={branchFormData.managerPhone}
                     onChange={(e) => setBranchFormData({ ...branchFormData, managerPhone: e.target.value })}
-                    placeholder="+88017XXXXXXXX"
+                    placeholder="Optional"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 font-mono"
                   />
                 </div>
@@ -1512,9 +1608,24 @@ export const SecuritySettingsView: React.FC = () => {
                     type="text"
                     value={branchFormData.operatingHours}
                     onChange={(e) => setBranchFormData({ ...branchFormData, operatingHours: e.target.value })}
-                    placeholder="09:00 AM - 08:30 PM (Sat - Thu)"
+                    placeholder="Optional (e.g. 09:00 AM - 08:30 PM)"
                     className="w-full border border-slate-200 rounded-lg px-3 py-2"
                   />
+                </div>
+
+                <div className="col-span-2 flex items-center justify-between pt-1">
+                  <span className="font-semibold text-slate-700">Branch Active Status</span>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={branchFormData.isActive}
+                      onChange={(e) => setBranchFormData({ ...branchFormData, isActive: e.target.checked })}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="font-semibold text-slate-700">
+                      {branchFormData.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </label>
                 </div>
               </div>
 

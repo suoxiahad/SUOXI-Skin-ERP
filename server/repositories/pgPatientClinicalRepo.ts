@@ -20,6 +20,7 @@ import { savePrivateDataUrl } from '../storage/localFileStorage.ts';
 import {
   generateCode,
   pgLogAuditEvent,
+  pgRequireBranch,
   toDateOnly,
   toIsoString,
   toNumber,
@@ -299,7 +300,8 @@ export const pgPatientClinicalRepo = {
 
       const id = `pt-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
       const patientIdCode = generateCode('SX');
-      const branchId = data.branchId || 'br-dhanmondi';
+      const branch = await pgRequireBranch(data.branchId || actor.branchId, client);
+      const branchId = branch.id;
 
       const res = await client.query(
         `
@@ -520,7 +522,7 @@ export const pgPatientClinicalRepo = {
   ): Promise<Appointment & Record<string, unknown>> {
     const patientId = String(raw.patient_id || raw.patientId || '');
     const doctorId = String(raw.provider_id || raw.doctorId || 'usr-101');
-    const branchId = String(raw.branch_id || raw.branchId || 'br-dhanmondi');
+    const requestedBranchId = raw.branch_id || raw.branchId ? String(raw.branch_id || raw.branchId) : '';
     const appointmentDate = String(raw.appointment_date || raw.appointmentDate || '');
     const appointmentTime = String(raw.start_time || raw.appointmentTime || '');
     const durationMinutes = toNumber(raw.duration_minutes || raw.durationMinutes, 30);
@@ -536,8 +538,7 @@ export const pgPatientClinicalRepo = {
         throw err;
       }
 
-      const brRes = await client.query('SELECT id, name FROM branches WHERE id = $1', [branchId]);
-      const branch = brRes.rows[0] || { id: pt.branchId || 'br-dhanmondi', name: 'Dhanmondi Main Center' };
+      const branch = await pgRequireBranch(requestedBranchId || pt.branchId || actor.branchId, client);
 
       const docRes = await client.query('SELECT id, name FROM users WHERE id = $1', [doctorId]);
       const doctorName =

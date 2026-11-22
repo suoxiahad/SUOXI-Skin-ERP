@@ -1246,7 +1246,7 @@ export const DoctorConsultationView: React.FC = () => {
                     </option>
                   ))
                 ) : (
-                  <option value="br-dhanmondi">Dhanmondi Branch</option>
+                  <option value="">No branches configured</option>
                 )}
               </select>
             </div>
@@ -2569,7 +2569,7 @@ export const DoctorConsultationView: React.FC = () => {
           </span>
           <span className="hidden sm:inline text-slate-300" aria-hidden="true">|</span>
           <span className="hidden sm:inline tabular-nums">
-            {activeBranch?.name || 'Dhanmondi Branch'} · {visitType} · {formatBDT(consultationFee)}
+            {activeBranch?.name || 'Clinic Branch'} · {visitType} · {formatBDT(consultationFee)}
           </span>
         </div>
 

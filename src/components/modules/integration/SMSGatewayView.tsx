@@ -29,7 +29,7 @@ import { useApp } from '../../../context/AppContext.tsx';
 import type { SmsGatewayConfig, SmsLogRecord, SmsTemplate } from '../../../types/index.ts';
 
 export const SMSGatewayView: React.FC = () => {
-  const { addToast, language } = useApp();
+  const { addToast, language, branches, activeBranchId } = useApp();
   const isBn = language === 'bn';
 
   const [activeTab, setActiveTab] = useState<'settings' | 'send' | 'templates' | 'automation' | 'logs'>('settings');
@@ -62,7 +62,7 @@ export const SMSGatewayView: React.FC = () => {
   const [messageType, setMessageType] = useState<'text' | 'unicode'>('text');
   const [messageLabel, setMessageLabel] = useState<'transactional' | 'promotional'>('transactional');
   const [smsContent, setSmsContent] = useState(
-    'Dear Sumaiya Rahman, your appointment with Dr. Nusrat Jahan is confirmed on 21 Oct 2026 at 4:30 PM (Dhanmondi Main Center). Token #01. Helpline: +8801711223344. - SUOXI Skin Care'
+    'Dear Sumaiya Rahman, your appointment with Dr. Nusrat Jahan is confirmed on 21 Oct 2026 at 4:30 PM ({{branch_name}}). Token #01. - SUOXI Skin Care'
   );
   const [isSendingSms, setIsSendingSms] = useState(false);
   const [lastShootResult, setLastShootResult] = useState<any>(null);
@@ -158,7 +158,9 @@ export const SMSGatewayView: React.FC = () => {
     sample = sample.replace(/\{\{doctor_name\}\}/g, 'Dr. Nusrat Jahan');
     sample = sample.replace(/\{\{appointment_date\}\}/g, '04 Nov 2026');
     sample = sample.replace(/\{\{appointment_time\}\}/g, '10:04 AM');
-    sample = sample.replace(/\{\{branch_name\}\}/g, 'Dhanmondi Main Center');
+    const activeBranchName =
+      branches.find((b) => b.id === activeBranchId)?.name || branches[0]?.name || 'SUOXI Clinic';
+    sample = sample.replace(/\{\{branch_name\}\}/g, activeBranchName);
     sample = sample.replace(/\{\{token\}\}/g, '#08');
     sample = sample.replace(/\{\{amount\}\}/g, '3,500');
     sample = sample.replace(/\{\{invoice_number\}\}/g, 'INV-2026-0042');

@@ -51,7 +51,7 @@ export const ReceptionCheckInView: React.FC = () => {
   const [newPhone, setNewPhone] = useState('');
   const [newAge, setNewAge] = useState<number | ''>('');
   const [newGender, setNewGender] = useState<'female' | 'male' | 'other' | ''>('');
-  const [newAddress, setNewAddress] = useState('Dhanmondi, Dhaka');
+  const [newAddress, setNewAddress] = useState('');
   const [newBloodGroup, setNewBloodGroup] = useState('');
   const [newSkinType, setNewSkinType] = useState('Type IV (South Asian Moderate Brown)');
   const [newSkinConcern, setNewSkinConcern] = useState('Acne Outbreaks & Hyperpigmentation');

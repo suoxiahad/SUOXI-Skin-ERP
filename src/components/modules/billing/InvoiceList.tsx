@@ -30,7 +30,7 @@ import { A4InvoiceModal } from './A4InvoiceModal.tsx';
 type DateFilterPreset = 'today' | 'yesterday' | 'this_week' | 'this_month' | 'all' | 'custom';
 
 export const InvoiceList: React.FC = () => {
-  const { addToast, language } = useApp();
+  const { addToast, language, branches } = useApp();
   const isBn = language === 'bn';
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -547,7 +547,9 @@ export const InvoiceList: React.FC = () => {
                       </td>
 
                       <td className="py-2.5 px-4 text-slate-600 truncate max-w-[120px]">
-                        {inv.branchName ? inv.branchName.split(' ')[0] : (inv.branchId === 'br-uttara' ? 'Uttara' : 'Dhanmondi')}
+                        {inv.branchName
+                          ? inv.branchName.split(' ')[0]
+                          : branches.find((b) => b.id === inv.branchId)?.name || inv.branchId || '—'}
                       </td>
 
                       <td className="py-2.5 px-4 text-right font-bold text-slate-900 tabular-nums">
