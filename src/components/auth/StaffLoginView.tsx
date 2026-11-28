@@ -1,18 +1,37 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  AlertCircle,
+  AlertTriangle,
   ArrowRight,
   BadgeCheck,
+  Calendar,
   CheckCircle2,
+  CreditCard,
   Eye,
   EyeOff,
   KeyRound,
+  Layers,
   Loader2,
   Lock,
   ShieldCheck,
+  Sparkles,
+  Stethoscope,
+  X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
 import { api } from '../../api/client.ts';
+
+interface WarningPopupState {
+  title: string;
+  message: string;
+}
+
+const CLINIC_MODULES = [
+  { label: 'Patient CRM', dotClass: 'bg-emerald-400' },
+  { label: 'Consultations', dotClass: 'bg-teal-400' },
+  { label: 'Packages', dotClass: 'bg-amber-400' },
+  { label: 'Billing POS', dotClass: 'bg-sky-400' },
+  { label: 'Inventory', dotClass: 'bg-rose-400' },
+];
 
 export const StaffLoginView: React.FC = () => {
   const {
@@ -20,18 +39,13 @@ export const StaffLoginView: React.FC = () => {
     mustChangePassword,
     clearMustChangePassword,
     currentUser,
-    language,
-    navigate,
   } = useApp();
-
-  const isBn = language === 'bn';
 
   const [employeeId, setEmployeeId] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [shakeKey, setShakeKey] = useState(0);
+  const [warningPopup, setWarningPopup] = useState<WarningPopupState | null>(null);
 
   // First-login mandatory password rotation state
   const [newPassword, setNewPassword] = useState('');
@@ -39,27 +53,49 @@ export const StaffLoginView: React.FC = () => {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [updatingPwd, setUpdatingPwd] = useState(false);
 
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
+  const newPasswordInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!warningPopup) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeWarningPopup();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [warningPopup, mustChangePassword]);
+
+  const closeWarningPopup = () => {
+    setWarningPopup(null);
+    requestAnimationFrame(() => {
+      if (mustChangePassword) {
+        newPasswordInputRef.current?.focus();
+      } else {
+        passwordInputRef.current?.focus();
+      }
+    });
+  };
+
   const handleIdentifierChange = (raw: string) => {
-    // Auto-uppercase Employee ID codes (e.g. sx-1001 -> SX-1001), preserve lowercase if user enters an email address
     const next = raw.includes('@') ? raw : raw.toUpperCase();
     setEmployeeId(next);
   };
 
-  const triggerError = (msg: string) => {
-    setError(msg);
-    setShakeKey((k) => k + 1);
+  const showWarning = (title: string, message: string) => {
+    setWarningPopup({ title, message });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setWarningPopup(null);
 
     const cleanId = employeeId.trim();
     if (!cleanId || !password) {
-      triggerError(
-        isBn
-          ? 'আপনার Employee ID এবং পাসওয়ার্ড দিন।'
-          : 'Please enter your Employee ID and password.'
+      showWarning(
+        'Missing Credentials',
+        'Please enter both your Employee ID and password to sign in.'
       );
       return;
     }
@@ -71,12 +107,11 @@ export const StaffLoginView: React.FC = () => {
         setPassword('');
       }
     } catch (err) {
-      triggerError(
-        err instanceof Error
-          ? err.message
-          : isBn
-          ? 'Employee ID বা পাসওয়ার্ড সঠিক নয়।'
-          : 'Invalid Employee ID or password.'
+      const rawMsg = err instanceof Error ? err.message : '';
+      const isLockout = /lock|too many|attempt|wait/i.test(rawMsg);
+      showWarning(
+        isLockout ? 'Account Temporarily Locked' : 'Incorrect Password or Employee ID',
+        rawMsg || 'Invalid Employee ID or password. Please verify your credentials and try again.'
       );
     } finally {
       setSubmitting(false);
@@ -85,21 +120,19 @@ export const StaffLoginView: React.FC = () => {
 
   const handlePasswordUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setWarningPopup(null);
 
     if (newPassword.length < 8) {
-      triggerError(
-        isBn
-          ? 'নতুন পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে।'
-          : 'New password must be at least 8 characters long.'
+      showWarning(
+        'Password Too Short',
+        'Your new password must be at least 8 characters long.'
       );
       return;
     }
     if (newPassword !== confirmPassword) {
-      triggerError(
-        isBn
-          ? 'নতুন পাসওয়ার্ড এবং কনফার্ম পাসওয়ার্ড মিলছে না।'
-          : 'New password and confirmation do not match.'
+      showWarning(
+        'Passwords Do Not Match',
+        'The new password and confirmation password do not match. Please try again.'
       );
       return;
     }
@@ -112,12 +145,9 @@ export const StaffLoginView: React.FC = () => {
       setConfirmPassword('');
       clearMustChangePassword();
     } catch (err) {
-      triggerError(
-        err instanceof Error
-          ? err.message
-          : isBn
-          ? 'পাসওয়ার্ড পরিবর্তন করা যায়নি।'
-          : 'Unable to update password.'
+      showWarning(
+        'Password Update Failed',
+        err instanceof Error ? err.message : 'Unable to update password. Please try again.'
       );
     } finally {
       setUpdatingPwd(false);
@@ -125,188 +155,293 @@ export const StaffLoginView: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-12 bg-[#FAFBFD] text-slate-900 overflow-x-hidden">
+    <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2 bg-[#F8FAFC] text-slate-900 overflow-x-hidden">
       {/* =====================================================================
-          LEFT EDITORIAL ATMOSPHERIC CANVAS (Deep Obsidian-Emerald + Rose-Blush)
+          LEFT HALF: DARK EMERALD BRAND & WORKSPACE OVERVIEW PANEL
           ===================================================================== */}
-      <aside className="relative lg:col-span-7 bg-[#051812] text-white flex flex-col justify-between px-8 py-10 sm:px-12 lg:px-16 lg:py-14 overflow-hidden">
-        {/* Multi-layer Color Grading Backdrop */}
+      <aside className="relative bg-[#051812] text-white flex flex-col justify-between px-7 py-9 sm:px-12 lg:px-14 lg:py-11 overflow-hidden">
+        {/* Deep Forest-Emerald Multi-Tone Gradient */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              'linear-gradient(145deg, #04130E 0%, #08271D 48%, #0E2220 100%)',
+              'linear-gradient(145deg, #03120D 0%, #07261C 45%, #0B3328 82%, #0D3D35 100%)',
           }}
         />
 
-        {/* Drifting Emerald Ambient Bloom */}
+        {/* Ambient Emerald Top-Right Glow */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-28 -left-24 w-[520px] h-[520px] rounded-full animate-suoxi-mesh-a"
+          className="pointer-events-none absolute -top-28 right-[-80px] w-[420px] h-[420px] rounded-full animate-suoxi-mesh-a"
           style={{
             background:
-              'radial-gradient(circle at center, rgba(13, 165, 79, 0.34) 0%, rgba(13, 165, 79, 0.08) 45%, transparent 72%)',
+              'radial-gradient(circle at center, rgba(16, 185, 129, 0.28) 0%, rgba(13, 165, 79, 0.08) 48%, transparent 72%)',
             filter: 'blur(36px)',
           }}
         />
 
-        {/* Drifting Aesthetic Rose-Gold Warmth */}
+        {/* Ambient Teal Bottom-Left Glow */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-32 -right-16 w-[480px] h-[480px] rounded-full animate-suoxi-mesh-b"
+          className="pointer-events-none absolute -bottom-32 -left-20 w-[460px] h-[460px] rounded-full animate-suoxi-mesh-b"
           style={{
             background:
-              'radial-gradient(circle at center, rgba(240, 110, 132, 0.22) 0%, rgba(226, 168, 152, 0.09) 46%, transparent 72%)',
+              'radial-gradient(circle at center, rgba(20, 184, 166, 0.26) 0%, rgba(13, 165, 79, 0.08) 48%, transparent 72%)',
             filter: 'blur(42px)',
           }}
         />
 
-        {/* Subtle Precision Architectural Contour Rings */}
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 600 600"
-          className="pointer-events-none absolute right-[-140px] top-1/2 -translate-y-1/2 w-[540px] h-[540px] opacity-[0.14] animate-suoxi-orbit"
-        >
-          <circle
-            cx="300"
-            cy="300"
-            r="260"
-            fill="none"
-            stroke="url(#suoxiContour)"
-            strokeWidth="1"
-            strokeDasharray="6 10"
-          />
-          <circle
-            cx="300"
-            cy="300"
-            r="195"
-            fill="none"
-            stroke="url(#suoxiContour)"
-            strokeWidth="0.75"
-          />
-          <circle
-            cx="300"
-            cy="300"
-            r="130"
-            fill="none"
-            stroke="url(#suoxiContour)"
-            strokeWidth="0.6"
-            strokeDasharray="3 8"
-          />
-          <defs>
-            <linearGradient id="suoxiContour" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#34D399" />
-              <stop offset="60%" stopColor="#F06E84" />
-              <stop offset="100%" stopColor="#FFFFFF" />
-            </linearGradient>
-          </defs>
-        </svg>
-
-        {/* Subtle Hairline Architectural Grid */}
+        {/* Architectural Grid Pattern */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 opacity-[0.06]"
+          className="pointer-events-none absolute inset-0 opacity-[0.07]"
           style={{
             backgroundImage:
-              'linear-gradient(to right, rgba(255,255,255,0.4) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.4) 1px, transparent 1px)',
-            backgroundSize: '64px 64px',
+              'linear-gradient(to right, rgba(255,255,255,0.45) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.45) 1px, transparent 1px)',
+            backgroundSize: '44px 44px',
             maskImage:
-              'radial-gradient(ellipse at 35% 45%, black 10%, transparent 78%)',
+              'radial-gradient(ellipse at 40% 45%, black 15%, transparent 82%)',
           }}
         />
 
-        {/* Top Brand Identity */}
-        <div className="relative z-10 flex items-center gap-3.5 animate-suoxi-stagger">
-          <div className="w-11 h-11 rounded-xl bg-white/[0.08] border border-white/15 backdrop-blur-md flex items-center justify-center shadow-inner">
-            <ShieldCheck className="w-5 h-5 text-[#34D399]" />
+        {/* Top Brand Mark */}
+        <div className="relative z-10 flex items-center gap-3 animate-suoxi-stagger">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#0DA54F] to-emerald-400 flex items-center justify-center text-white shadow-md shadow-emerald-950/50 border border-white/15 shrink-0">
+            <Sparkles className="w-5 h-5 text-white" />
           </div>
           <div>
-            <p className="text-base font-bold tracking-tight text-white">SUOXI</p>
-            <p className="text-xs text-emerald-200/80 tracking-wide">
-              {isBn ? 'স্কিন কেয়ার অ্যান্ড এস্থেটিক সেন্টার' : 'Skin Care & Aesthetic Center'}
-            </p>
+            <span className="block text-base font-extrabold tracking-tight text-white leading-none">
+              SUOXI
+            </span>
+            <span className="block text-[11px] font-medium text-emerald-200/80 mt-1">
+              Skin Care &amp; Aesthetic Center
+            </span>
           </div>
         </div>
 
-        {/* Center Editorial Statement */}
-        <div className="relative z-10 my-10 lg:my-auto max-w-xl">
-          <p
-            className="text-xs font-medium tracking-[0.14em] uppercase text-emerald-300/90 mb-4 animate-suoxi-stagger"
-            style={{ animationDelay: '60ms' }}
-          >
-            {isBn ? 'ক্লিনিকাল অপারেশনস ও ইআরপি স্যুট' : 'Clinical Operations & ERP Suite'}
-          </p>
+        {/* Center Hero Headline + Module Strip + Clinical Workflow Cards */}
+        <div className="relative z-10 my-10 lg:my-auto max-w-xl space-y-7">
+          <div className="space-y-3 animate-suoxi-stagger" style={{ animationDelay: '60ms' }}>
+            <h1 className="text-3xl sm:text-4xl xl:text-[44px] font-extrabold tracking-tight leading-[1.12] text-white [text-wrap:balance]">
+              Your whole clinic,
+              <span className="block bg-gradient-to-r from-emerald-300 via-teal-200 to-emerald-400 bg-clip-text text-transparent">
+                one sign-in away.
+              </span>
+            </h1>
 
-          <h1
-            className="font-editorial text-4xl sm:text-5xl xl:text-[56px] font-semibold leading-[1.08] tracking-[-0.015em] text-white [text-wrap:balance] animate-suoxi-stagger"
+            <p className="text-sm sm:text-base text-slate-300/90 leading-relaxed max-w-md">
+              The clinical operations hub for every SUOXI branch—built for dermatologists, front desk, billing, and care teams.
+            </p>
+          </div>
+
+          {/* Crisp Module Tags */}
+          <div
+            className="flex flex-wrap items-center gap-2 animate-suoxi-stagger"
             style={{ animationDelay: '120ms' }}
           >
-            {isBn
-              ? 'নির্ভুল ডার্মাটোলজি ও এস্থেটিক কেয়ারের সমন্বিত কর্মক্ষেত্র।'
-              : 'Precision dermatology, unified across every branch.'}
-          </h1>
+            {CLINIC_MODULES.map((mod) => (
+              <span
+                key={mod.label}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/12 text-xs font-medium text-slate-100 backdrop-blur-xs"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${mod.dotClass}`} />
+                <span>{mod.label}</span>
+              </span>
+            ))}
+          </div>
 
-          <p
-            className="mt-5 text-sm sm:text-base text-slate-300/90 leading-relaxed max-w-lg animate-suoxi-stagger"
+          {/* Floating Glassmorphic Workspace Preview Cards (Non-spoofed operational capabilities) */}
+          <div
+            className="space-y-3 pt-1 max-w-md animate-suoxi-stagger"
             style={{ animationDelay: '180ms' }}
           >
-            {isBn
-              ? 'রোগী নিবন্ধন, কনসালটেশন, লেজার সেশন, প্যাকেজ লেজার, বিলিং এবং ইনভেন্টরি—সবকিছু এক নিরাপদ প্ল্যাটফর্মে।'
-              : 'Patient records, consultations, laser sessions, treatment packages, POS billing, and clinical inventory—secured in a single workspace.'}
-          </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Card 1 */}
+              <div className="p-4 rounded-2xl bg-white/[0.06] border border-white/12 backdrop-blur-md space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-300">
+                    Clinical EMR &amp; Desk
+                  </span>
+                  <Stethoscope className="w-3.5 h-3.5 text-emerald-300" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-white leading-snug">
+                    Consultations &amp; Rx
+                  </p>
+                  <p className="text-[11px] text-emerald-300/90 font-medium mt-0.5">
+                    Unified patient timeline
+                  </p>
+                </div>
+                <svg viewBox="0 0 140 24" className="w-full h-5 overflow-visible" aria-hidden="true">
+                  <path
+                    d="M 2 20 L 28 16 L 54 17 L 80 10 L 108 11 L 138 3"
+                    fill="none"
+                    stroke="#34D399"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+
+              {/* Card 2 */}
+              <div className="p-4 rounded-2xl bg-white/[0.06] border border-white/12 backdrop-blur-md space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-300">
+                    Laser &amp; Packages
+                  </span>
+                  <Layers className="w-3.5 h-3.5 text-teal-300" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-white leading-snug">
+                    Session Tracking
+                  </p>
+                  <p className="text-[11px] text-teal-300/90 font-medium mt-0.5">
+                    POS &amp; inventory linked
+                  </p>
+                </div>
+                <svg viewBox="0 0 140 24" className="w-full h-5 overflow-visible" aria-hidden="true">
+                  <path
+                    d="M 2 19 L 30 14 L 58 15 L 86 9 L 114 10 L 138 4"
+                    fill="none"
+                    stroke="#5EEAD4"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+            </div>
+
+            {/* Bottom Wide Card */}
+            <div className="p-3.5 rounded-2xl bg-white/[0.06] border border-white/12 backdrop-blur-md flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/25 border border-emerald-400/30 flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-4 h-4 text-emerald-300" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate">
+                  Role-Scoped Branch Workspace
+                </p>
+                <p className="text-[11px] text-slate-300/85 truncate mt-0.5">
+                  Encrypted sessions · Branch isolation · Audit-logged actions
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Left Footer */}
+        <div className="relative z-10 text-xs text-slate-400/90 flex flex-wrap items-center justify-between gap-2">
+          <span>© 2026 SUOXI Clinical Operations · Built by SUOXI IT</span>
         </div>
       </aside>
 
       {/* =====================================================================
-          RIGHT PORCELAIN SIGN-IN SURFACE
+          RIGHT HALF: SOFT LUMINOUS SURFACE WITH CENTERED SIGN-IN CARD
           ===================================================================== */}
-      <main className="lg:col-span-5 flex flex-col justify-between px-6 py-8 sm:px-12 lg:px-14 lg:py-12 bg-[#FAFBFD]">
-        {/* Center Form Container (Single Clean Surface, No Nested Card Boxes) */}
-        <div className="w-full max-w-[420px] mx-auto flex-1 flex flex-col justify-center py-8">
+      <main className="relative flex flex-col items-center justify-center px-5 py-10 sm:px-10 lg:px-12 overflow-hidden bg-[#F8FAFC]">
+        {/* Soft Radial Mesh Backdrop (Emerald + Soft Rose + Sky Hint) */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(circle at 18% 82%, rgba(244, 114, 182, 0.11) 0%, transparent 45%), radial-gradient(circle at 86% 18%, rgba(13, 165, 79, 0.12) 0%, transparent 46%), radial-gradient(circle at 52% 48%, rgba(20, 184, 166, 0.08) 0%, transparent 56%)',
+          }}
+        />
+
+        {/* Subtle Dot Matrix Texture */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-45"
+          style={{
+            backgroundImage: 'radial-gradient(rgba(15, 23, 42, 0.12) 1px, transparent 1px)',
+            backgroundSize: '20px 20px',
+          }}
+        />
+
+        {/* Concentric Orbital Rings Behind Card */}
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 760 760"
+          className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[680px] h-[680px] max-w-none opacity-65"
+        >
+          <circle
+            cx="380"
+            cy="380"
+            r="240"
+            fill="none"
+            stroke="rgba(13, 165, 79, 0.14)"
+            strokeWidth="1"
+          />
+          <circle
+            cx="380"
+            cy="380"
+            r="335"
+            fill="none"
+            stroke="rgba(15, 23, 42, 0.07)"
+            strokeWidth="1"
+          />
+        </svg>
+
+        {/* Subtle Floating Clinical Icon Tiles (Desktop only, low visual distraction) */}
+        <div
+          aria-hidden="true"
+          className="hidden sm:flex pointer-events-none absolute top-[14%] left-[12%] w-10 h-10 rounded-xl bg-white/90 border border-slate-200/80 shadow-sm items-center justify-center text-emerald-600/80"
+        >
+          <Stethoscope className="w-4 h-4" />
+        </div>
+        <div
+          aria-hidden="true"
+          className="hidden sm:flex pointer-events-none absolute top-[20%] right-[10%] w-10 h-10 rounded-xl bg-white/90 border border-slate-200/80 shadow-sm items-center justify-center text-teal-600/80"
+        >
+          <ShieldCheck className="w-4 h-4" />
+        </div>
+        <div
+          aria-hidden="true"
+          className="hidden sm:flex pointer-events-none absolute bottom-[18%] left-[11%] w-10 h-10 rounded-xl bg-white/90 border border-slate-200/80 shadow-sm items-center justify-center text-amber-600/75"
+        >
+          <Calendar className="w-4 h-4" />
+        </div>
+        <div
+          aria-hidden="true"
+          className="hidden sm:flex pointer-events-none absolute bottom-[15%] right-[12%] w-10 h-10 rounded-xl bg-white/90 border border-slate-200/80 shadow-sm items-center justify-center text-rose-500/75"
+        >
+          <CreditCard className="w-4 h-4" />
+        </div>
+
+        {/* Centered Elevated Sign-In Card */}
+        <div className="relative z-10 w-full max-w-[420px] bg-white rounded-2xl border border-slate-200/90 shadow-[0_24px_60px_-15px_rgba(5,24,18,0.14)] p-7 sm:p-8 animate-suoxi-stagger">
           {mustChangePassword && currentUser ? (
             /* -----------------------------------------------------------------
                FIRST-LOGIN MANDATORY PASSWORD ROTATION FLOW
                ----------------------------------------------------------------- */
-            <div
-              key={`pwd-rotate-${shakeKey}`}
-              className={`animate-suoxi-stagger ${shakeKey > 0 && error ? 'animate-suoxi-shake' : ''}`}
-            >
-              <div className="mb-7">
-                <p className="text-xs font-semibold text-[#0DA54F] mb-2">
-                  {isBn ? 'নিরাপত্তা যাচাই সম্পন্ন' : 'First Sign-In Security Step'}
+            <div>
+              <div className="mb-6">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-[#0DA54F] mb-1.5">
+                  First Sign-In Security Step
                 </p>
-                <h2 className="text-2xl sm:text-[28px] font-bold tracking-tight text-slate-900 [text-wrap:balance]">
-                  {isBn ? 'নতুন পাসওয়ার্ড সেট করুন' : 'Set your personal password'}
+                <h2 className="text-2xl font-bold tracking-tight text-slate-900 [text-wrap:balance]">
+                  Set your personal password
                 </h2>
-                <p className="mt-2 text-sm text-slate-500 leading-relaxed">
-                  {isBn
-                    ? `স্বাগতম ${currentUser.name}। আপনার প্রথম লগইন সম্পন্ন করতে একটি নতুন ব্যক্তিগত পাসওয়ার্ড দিন।`
-                    : `Welcome, ${currentUser.name}. Update your temporary password before entering the clinical workspace.`}
+                <p className="mt-1.5 text-xs sm:text-sm text-slate-500 leading-relaxed">
+                  Welcome, {currentUser.name}. Update your temporary password before entering your workspace.
                 </p>
               </div>
 
-              <form onSubmit={handlePasswordUpdate} className="space-y-5">
-                {error && (
-                  <div
-                    role="alert"
-                    className="flex items-start gap-2.5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs leading-relaxed"
-                  >
-                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
-                )}
-
+              <form onSubmit={handlePasswordUpdate} className="space-y-4">
                 <div>
                   <label
                     htmlFor="new-staff-password"
-                    className="block text-xs font-semibold text-slate-700 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    {isBn ? 'নতুন পাসওয়ার্ড (কমপক্ষে ৮ অক্ষর)' : 'New Password (minimum 8 characters)'}
+                    New Password (minimum 8 characters)
                   </label>
                   <div className="relative group">
                     <KeyRound className="w-4 h-4 text-slate-400 group-focus-within:text-[#0DA54F] transition-colors duration-150 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
+                      ref={newPasswordInputRef}
                       id="new-staff-password"
                       type={showNewPassword ? 'text' : 'password'}
                       autoComplete="new-password"
@@ -314,12 +449,12 @@ export const StaffLoginView: React.FC = () => {
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       placeholder="••••••••••••"
-                      className="w-full h-12 pl-10 pr-12 text-sm bg-white border border-slate-300/90 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/15 focus:border-[#0DA54F] transition-all duration-150"
+                      className="w-full h-11 pl-10 pr-12 text-sm bg-slate-50/60 focus:bg-white border border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/12 focus:border-[#0DA54F] transition-all duration-150"
                     />
                     <button
                       type="button"
                       onClick={() => setShowNewPassword((p) => !p)}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
                       aria-label={showNewPassword ? 'Hide password' : 'Show password'}
                     >
                       {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -330,9 +465,9 @@ export const StaffLoginView: React.FC = () => {
                 <div>
                   <label
                     htmlFor="confirm-staff-password"
-                    className="block text-xs font-semibold text-slate-700 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    {isBn ? 'নতুন পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm New Password'}
+                    Confirm New Password
                   </label>
                   <div className="relative group">
                     <CheckCircle2 className="w-4 h-4 text-slate-400 group-focus-within:text-[#0DA54F] transition-colors duration-150 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -344,7 +479,7 @@ export const StaffLoginView: React.FC = () => {
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="••••••••••••"
-                      className="w-full h-12 pl-10 pr-4 text-sm bg-white border border-slate-300/90 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/15 focus:border-[#0DA54F] transition-all duration-150"
+                      className="w-full h-11 pl-10 pr-4 text-sm bg-slate-50/60 focus:bg-white border border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/12 focus:border-[#0DA54F] transition-all duration-150"
                     />
                   </div>
                 </div>
@@ -352,7 +487,7 @@ export const StaffLoginView: React.FC = () => {
                 <button
                   type="submit"
                   disabled={updatingPwd}
-                  className="w-full h-12 px-5 rounded-xl bg-[#0DA54F] hover:bg-[#0A8740] active:scale-[0.99] disabled:opacity-60 text-white text-sm font-semibold flex items-center justify-center gap-2.5 transition-all duration-150 shadow-sm cursor-pointer"
+                  className="w-full h-11 px-5 rounded-xl bg-gradient-to-r from-[#0DA54F] to-[#087A3B] hover:from-[#0b9446] hover:to-[#076631] active:scale-[0.99] disabled:opacity-60 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 shadow-md shadow-emerald-600/20 cursor-pointer"
                 >
                   {updatingPwd ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -360,13 +495,7 @@ export const StaffLoginView: React.FC = () => {
                     <CheckCircle2 className="w-4 h-4" />
                   )}
                   <span className="whitespace-nowrap shrink-0">
-                    {updatingPwd
-                      ? isBn
-                        ? 'আপডেট হচ্ছে...'
-                        : 'Updating password...'
-                      : isBn
-                      ? 'পাসওয়ার্ড সেভ করে প্রবেশ করুন'
-                      : 'Save Password & Continue'}
+                    {updatingPwd ? 'Updating password...' : 'Save Password & Continue'}
                   </span>
                 </button>
               </form>
@@ -375,45 +504,24 @@ export const StaffLoginView: React.FC = () => {
             /* -----------------------------------------------------------------
                STANDARD STAFF SIGN-IN FLOW (EMPLOYEE ID + PASSWORD)
                ----------------------------------------------------------------- */
-            <div
-              key={`login-form-${shakeKey}`}
-              className={shakeKey > 0 && error ? 'animate-suoxi-shake' : ''}
-            >
-              <div
-                className="mb-8 animate-suoxi-stagger"
-                style={{ animationDelay: '40ms' }}
-              >
-                <h2 className="text-2xl sm:text-[30px] font-bold tracking-tight text-slate-900 [text-wrap:balance]">
-                  {isBn ? 'স্টাফ সাইন ইন' : 'Sign in to SUOXI'}
+            <div>
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+                  Welcome back
                 </h2>
-                <p className="mt-2 text-sm text-slate-500 leading-relaxed">
-                  {isBn
-                    ? 'আপনার নির্ধারিত Employee ID (যেমন 0001) এবং পাসওয়ার্ড ব্যবহার করে প্রবেশ করুন।'
-                    : 'Enter your assigned Employee ID (e.g. 0001) and password to access your clinic desk.'}
+                <p className="mt-1 text-xs sm:text-sm text-slate-500">
+                  Sign in to your SUOXI workspace.
                 </p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-5">
-                {error && (
-                  <div
-                    role="alert"
-                    className="flex items-start gap-2.5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs leading-relaxed"
-                  >
-                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
-                )}
-
+              <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Employee ID Input */}
-                <div
-                  className="animate-suoxi-stagger"
-                  style={{ animationDelay: '100ms' }}
-                >
+                <div>
                   <label
                     htmlFor="staff-employee-id"
-                    className="block text-xs font-semibold text-slate-700 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    {isBn ? 'এমপ্লয়ি আইডি (Employee ID)' : 'Employee ID'}
+                    Employee ID
                   </label>
                   <div className="relative group">
                     <BadgeCheck className="w-4 h-4 text-slate-400 group-focus-within:text-[#0DA54F] transition-colors duration-150 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -427,25 +535,23 @@ export const StaffLoginView: React.FC = () => {
                       value={employeeId}
                       onChange={(e) => handleIdentifierChange(e.target.value)}
                       placeholder="0001"
-                      className="w-full h-12 pl-10 pr-4 text-sm font-id tracking-wider bg-white border border-slate-300/90 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/15 focus:border-[#0DA54F] transition-all duration-150"
+                      className="w-full h-11 pl-10 pr-4 text-sm font-id tracking-wider bg-slate-50/60 focus:bg-white border border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/12 focus:border-[#0DA54F] transition-all duration-150"
                     />
                   </div>
                 </div>
 
                 {/* Password Input */}
-                <div
-                  className="animate-suoxi-stagger"
-                  style={{ animationDelay: '160ms' }}
-                >
+                <div>
                   <label
                     htmlFor="staff-password"
-                    className="block text-xs font-semibold text-slate-700 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    {isBn ? 'পাসওয়ার্ড' : 'Password'}
+                    Password
                   </label>
                   <div className="relative group">
                     <Lock className="w-4 h-4 text-slate-400 group-focus-within:text-[#0DA54F] transition-colors duration-150 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
+                      ref={passwordInputRef}
                       id="staff-password"
                       type={showPassword ? 'text' : 'password'}
                       autoComplete="current-password"
@@ -453,12 +559,12 @@ export const StaffLoginView: React.FC = () => {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••••••"
-                      className="w-full h-12 pl-10 pr-12 text-sm bg-white border border-slate-300/90 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/15 focus:border-[#0DA54F] transition-all duration-150"
+                      className="w-full h-11 pl-10 pr-12 text-sm bg-slate-50/60 focus:bg-white border border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#0DA54F]/12 focus:border-[#0DA54F] transition-all duration-150"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword((prev) => !prev)}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
                       aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -467,71 +573,109 @@ export const StaffLoginView: React.FC = () => {
                 </div>
 
                 {/* Submit CTA */}
-                <div
-                  className="pt-1 animate-suoxi-stagger"
-                  style={{ animationDelay: '220ms' }}
-                >
+                <div className="pt-1">
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="group w-full h-12 px-5 rounded-xl bg-[#0DA54F] hover:bg-[#0A8740] active:scale-[0.99] disabled:opacity-60 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 shadow-sm cursor-pointer"
+                    className="group w-full h-11 px-5 rounded-xl bg-gradient-to-r from-[#0DA54F] to-[#087A3B] hover:from-[#0b9446] hover:to-[#076631] active:scale-[0.99] disabled:opacity-60 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 shadow-md shadow-emerald-600/20 cursor-pointer"
                   >
                     {submitting ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span className="whitespace-nowrap shrink-0">
-                          {isBn ? 'যাচাই করা হচ্ছে...' : 'Verifying credentials...'}
+                          Verifying credentials...
                         </span>
                       </>
                     ) : (
                       <>
-                        <span className="whitespace-nowrap shrink-0">
-                          {isBn ? 'সাইন ইন করুন' : 'Sign In'}
-                        </span>
+                        <span className="whitespace-nowrap shrink-0">Sign In</span>
                         <ArrowRight className="w-4 h-4 transition-transform duration-150 group-hover:translate-x-0.5" />
                       </>
                     )}
                   </button>
                 </div>
+
+                {/* Encrypted Sign-in Note */}
+                <div className="flex items-center justify-center gap-1.5 pt-1 text-[11px] font-medium text-slate-500">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#0DA54F] shrink-0" />
+                  <span>Secure, encrypted sign-in</span>
+                </div>
               </form>
 
-              <p
-                className="mt-6 text-xs text-slate-500 leading-relaxed animate-suoxi-stagger"
-                style={{ animationDelay: '260ms' }}
-              >
-                {isBn
-                  ? 'আইডি বা পাসওয়ার্ড ভুলে গেলে আপনার ব্রাঞ্চ অ্যাডমিনিস্ট্রেটরের সাথে যোগাযোগ করুন।'
-                  : 'Need an Employee ID or password reset? Contact your Branch Administrator.'}
-              </p>
+              <div className="mt-6 pt-5 border-t border-slate-100 space-y-2.5 text-center">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Need an Employee ID or password reset? Contact your Branch Administrator.
+                </p>
 
-              <p
-                className="mt-2.5 text-[11px] font-medium tracking-wide text-slate-400 animate-suoxi-stagger"
-                style={{ animationDelay: '300ms' }}
-              >
-                Developed &amp; Designed By SUOXI IT
-              </p>
+                <p className="text-[11px] font-semibold tracking-wide text-slate-400">
+                  Developed &amp; Designed By SUOXI IT
+                </p>
+              </div>
             </div>
           )}
         </div>
-
-        {/* Clean Unboxed Footer with Patient Portal Switch */}
-        <footer className="pt-6 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
-          <span>
-            {isBn
-              ? '© SUOXI ক্লিনিকাল অপারেশনস'
-              : '© SUOXI Clinical Operations'}
-          </span>
-
-          <button
-            type="button"
-            onClick={() => navigate('/portal')}
-            className="font-medium text-slate-700 hover:text-[#0DA54F] transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <span>{isBn ? 'রোগী পোর্টাল (Patient Portal)' : 'Patient Portal'}</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </footer>
       </main>
+
+      {/* =====================================================================
+          AUTHENTICATION WARNING POPUP MODAL (WRONG PASSWORD / VALIDATION)
+          ===================================================================== */}
+      {warningPopup && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auth-warning-title"
+          aria-describedby="auth-warning-message"
+          onClick={closeWarningPopup}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-white rounded-2xl border border-amber-200/90 shadow-2xl p-6 animate-in zoom-in-95 duration-150"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-11 h-11 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3
+                    id="auth-warning-title"
+                    className="text-base font-bold text-slate-900 leading-snug"
+                  >
+                    {warningPopup.title}
+                  </h3>
+                  <p
+                    id="auth-warning-message"
+                    className="mt-1.5 text-xs sm:text-sm text-slate-600 leading-relaxed"
+                  >
+                    {warningPopup.message}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeWarningPopup}
+                aria-label="Close warning"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                autoFocus
+                onClick={closeWarningPopup}
+                className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Try Again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

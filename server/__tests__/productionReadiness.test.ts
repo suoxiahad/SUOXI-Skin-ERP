@@ -53,6 +53,7 @@ import {
 } from '../db/pgPool.ts';
 import { pgBillingPackageRepo } from '../repositories/pgBillingPackageRepo.ts';
 import { pgCallCenterReferralsRepo } from '../repositories/pgCallCenterReferralsRepo.ts';
+import { pgClinicStoreRepo } from '../repositories/pgClinicStoreRepo.ts';
 import { pgInventoryRepo } from '../repositories/pgInventoryRepo.ts';
 import {
   pgEnqueueNotification,
@@ -274,19 +275,20 @@ async function main() {
   setPgPoolOverride(createPGlitePool(pgDb));
 
   // 1. Clean-database migrations + idempotency + checksum verification
-  await test('1. Clean PostgreSQL migrations (0001 -> 0004) & idempotency', async () => {
+  await test('1. Clean PostgreSQL migrations (0001 -> 0005) & idempotency', async () => {
     const first = await runPgMigrations({ silent: true, useAdvisoryLock: false });
-    assert.equal(first.applied.length, 4, `Expected 4 migrations applied, got ${first.applied.join(',')}`);
+    assert.equal(first.applied.length, 5, `Expected 5 migrations applied, got ${first.applied.join(',')}`);
     assert.deepEqual(first.applied, [
       '0001_initial_schema.sql',
       '0002_referrals_and_ops_columns.sql',
       '0003_complete_erp_modules_and_integrity.sql',
       '0004_staff_employee_id.sql',
+      '0005_clinic_store_module.sql',
     ]);
 
     const second = await runPgMigrations({ silent: true, useAdvisoryLock: false });
     assert.equal(second.applied.length, 0);
-    assert.equal(second.skipped.length, 4);
+    assert.equal(second.skipped.length, 5);
 
     const status = await getMigrationStatus();
     assert.equal(status.every((s) => s.status === 'applied'), true);
@@ -294,7 +296,7 @@ async function main() {
     const health = await checkPgHealth();
     assert.equal(health.ok, true);
     assert.equal(health.schemaReady, true);
-    assert.equal(health.migrationsApplied, 4);
+    assert.equal(health.migrationsApplied, 5);
   });
 
   await test('2. Migration checksum tampering detection rejects modified applied migrations', async () => {
@@ -1043,6 +1045,185 @@ async function main() {
       assert.equal(reactivated?.isActive, true);
       const activeListAfter = await pgOrgRepo.listBranches({ activeOnly: true });
       assert.equal(activeListAfter.some((b) => b.id === created.id), true);
+    });
+
+    await test('14. Clinic Store: non-sellable catalog, requisition issue, insufficient stock protection, custody & HTTP RBAC', async () => {
+      const adminActor = {
+        id: 'usr-admin',
+        name: 'Super Admin',
+        email: 'admin@suoxi.tech',
+        role: 'super_admin' as const,
+        phone: '+8801700000001',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+      };
+      const recepActor = {
+        id: 'usr-rec-dhn',
+        name: 'Dhanmondi Receptionist',
+        email: 'rec@suoxi.tech',
+        role: 'receptionist' as const,
+        phone: '+8801700000003',
+        branchId: 'br-dhanmondi',
+        branchName: 'Dhanmondi Main Center',
+      };
+
+      // 1. Create non-sellable Clinic Store item & stock-in
+      const sanitizer = await pgClinicStoreRepo.createItem(
+        {
+          name: 'Hexisol Hand Sanitizer 500ml',
+          category: 'Clinical & Hygiene Consumables',
+          subCategory: 'Hygiene',
+          unit: 'bottles',
+          currentStock: 4,
+          reorderLevel: 5,
+          unitCostBDT: 220,
+          vendorName: 'ACI Healthcare',
+          storageLocation: 'Rack A1',
+          branchId: 'br-dhanmondi',
+        },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.equal(sanitizer.isSellable, false);
+      assert.equal(sanitizer.status, 'low_stock');
+
+      const stockInRes = await pgClinicStoreRepo.stockInItem(
+        sanitizer.id,
+        { quantity: 6, unitCostBDT: 220, referenceNo: 'PO-STR-101' },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.equal(stockInRes.item.currentStock, 10);
+      assert.equal(stockInRes.item.status, 'in_stock');
+
+      // 2. Receptionist submits a requisition for 3 bottles
+      const req = await pgClinicStoreRepo.createRequisition(
+        {
+          department: 'Reception & Front Desk',
+          roomNumber: 'Front Desk 1',
+          priority: 'urgent',
+          notes: 'Front desk sanitizer refill',
+          branchId: 'br-dhanmondi',
+          items: [{ itemId: sanitizer.id, requestedQty: 3 }],
+        },
+        recepActor,
+        '127.0.0.1'
+      );
+      assert.equal(req.status, 'pending');
+
+      // 3. Over-stock issue check via an oversized requisition must reject with INSUFFICIENT_STOCK
+      const oversizedReq = await pgClinicStoreRepo.createRequisition(
+        {
+          department: 'Consultation Desk',
+          priority: 'normal',
+          branchId: 'br-dhanmondi',
+          items: [{ itemId: sanitizer.id, requestedQty: 50 }],
+        },
+        adminActor,
+        '127.0.0.1'
+      );
+      await assert.rejects(
+        () => pgClinicStoreRepo.issueRequisition(oversizedReq.id, {}, adminActor, '127.0.0.1'),
+        (err: any) => err?.code === 'INSUFFICIENT_STOCK'
+      );
+
+      // 4. Approve and issue valid requisition (3 bottles) -> stock becomes 7
+      await pgClinicStoreRepo.decideRequisition(req.id, { decision: 'approve' }, adminActor, '127.0.0.1');
+      const issued = await pgClinicStoreRepo.issueRequisition(req.id, {}, adminActor, '127.0.0.1');
+      assert.equal(issued.status, 'issued');
+
+      const afterItems = await pgClinicStoreRepo.listItems({ branchId: 'br-dhanmondi' });
+      const updatedSanitizer = afterItems.find((i) => i.id === sanitizer.id);
+      assert.equal(updatedSanitizer?.currentStock, 7);
+
+      // 5. Requester confirms receipt
+      const confirmed = await pgClinicStoreRepo.confirmReceipt(req.id, recepActor, '127.0.0.1');
+      assert.equal(confirmed.status, 'received');
+
+      // 6. Instrument register -> assign -> return custody
+      const inst = await pgClinicStoreRepo.createInstrument(
+        {
+          name: 'Heine Delta 30 Dermascope',
+          serialNumber: 'HN-30-881',
+          purchaseCostBDT: 48000,
+          branchId: 'br-dhanmondi',
+        },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.equal(inst.custodyStatus, 'in_store');
+
+      const assigned = await pgClinicStoreRepo.assignInstrument(
+        inst.id,
+        { assignedRoom: 'Room 101', assignedToUserName: 'Dr. Farhana Rahman' },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.equal(assigned.custodyStatus, 'assigned');
+      assert.equal(assigned.condition, 'in_use');
+
+      const returned = await pgClinicStoreRepo.returnInstrument(
+        inst.id,
+        { condition: 'good', notes: 'Cleaned and stored' },
+        adminActor,
+        '127.0.0.1'
+      );
+      assert.equal(returned.custodyStatus, 'in_store');
+      assert.equal(returned.condition, 'good');
+
+      // 7. OPEX Summary & Ledger check
+      const summary = await pgClinicStoreRepo.getSummary('br-dhanmondi');
+      assert.ok(summary.monthlyConsumptionBDT >= 660); // 3 * 220
+      assert.ok(summary.departmentCosts.some((d) => d.department === 'Reception & Front Desk'));
+
+      // 8. HTTP RBAC: Receptionist gets masked unitCostBDT=0 on /items, forbidden on /ledger & POST /items, allowed on POST /requisitions
+      const prevEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        const csrfRes = await httpReq(baseUrl, 'GET', '/api/v1/csrf-token');
+        const csrf = csrfRes.body.data.csrfToken;
+        const loginRes = await httpReq(baseUrl, 'POST', '/api/v1/auth/login', {
+          headers: { 'x-csrf-token': csrf },
+          body: { identifier: 'sx-1003', password: 'RecepStrong#2026!' },
+        });
+        assert.equal(loginRes.status, 200);
+        const recCookie = extractCookie(loginRes.headers['set-cookie'], 'suoxi_sid');
+
+        const itemsResp = await httpReq(baseUrl, 'GET', '/api/v1/store/items', {
+          headers: { Cookie: recCookie },
+        });
+        assert.equal(itemsResp.status, 200);
+        assert.equal(itemsResp.body.data[0].unitCostBDT, 0);
+
+        const ledgerForbidden = await httpReq(baseUrl, 'GET', '/api/v1/store/ledger', {
+          headers: { Cookie: recCookie },
+        });
+        assert.equal(ledgerForbidden.status, 403);
+
+        const createForbidden = await httpReq(baseUrl, 'POST', '/api/v1/store/items', {
+          headers: { 'x-csrf-token': csrf, Cookie: recCookie },
+          body: {
+            name: 'Unauthorized Pen',
+            category: 'Office & Front-Desk Supplies',
+            unit: 'boxes',
+          },
+        });
+        assert.equal(createForbidden.status, 403);
+
+        const reqCreated = await httpReq(baseUrl, 'POST', '/api/v1/store/requisitions', {
+          headers: { 'x-csrf-token': csrf, Cookie: recCookie },
+          body: {
+            department: 'Reception & Front Desk',
+            roomNumber: 'Desk 2',
+            priority: 'normal',
+            items: [{ itemId: sanitizer.id, requestedQty: 1 }],
+          },
+        });
+        assert.equal(reqCreated.status, 201);
+        assert.equal(reqCreated.body.data.totalEstimatedCostBDT, 0);
+      } finally {
+        process.env.NODE_ENV = prevEnv;
+      }
     });
   } finally {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));

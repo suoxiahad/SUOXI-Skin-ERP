@@ -3,9 +3,15 @@
  * Global Application Context & State Provider
  */
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { api, ApiClientError } from '../api/client.ts';
 import type { User, UserRole, Branch } from '../types/index.ts';
+import {
+  canAccessRouteState,
+  canAccessView,
+  canSearchPatients,
+  getDefaultHomePathForUser,
+} from '../utils/rbac.ts';
 
 export type Language = 'en' | 'bn';
 
@@ -21,6 +27,7 @@ interface AppContextType {
   currentUser: User | null;
   setCurrentUser: (u: User) => void;
   userRole: UserRole;
+  isAuthChecking: boolean;
   authRequired: boolean;
   mustChangePassword: boolean;
   clearMustChangePassword: () => void;
@@ -69,6 +76,11 @@ export function resolveRouteFromPath(rawPath: string): {
   canonicalPath: string;
 } {
   const clean = (rawPath || '/').toLowerCase().split('?')[0].replace(/\/+$/, '') || '/';
+
+  // Staff Login Route
+  if (clean === '/login' || clean === '/auth/login') {
+    return { view: 'login', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/login' };
+  }
 
   // 0. Executive Dashboard (SmartDesk styled)
   if (clean === '/dashboard' || clean === '/' || clean === '') {
@@ -196,6 +208,19 @@ export function resolveRouteFromPath(rawPath: string): {
   if (clean === '/inventory/suppliers' || clean === '/inventory/vendors') {
     return { view: 'inventory-suppliers', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/inventory/suppliers' };
   }
+  // 6.1 Clinic Store (Standalone Internal Supplies & Instruments)
+  if (clean === '/store' || clean === '/store/stock' || clean === '/store/catalog') {
+    return { view: 'store-stock', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/store/stock' };
+  }
+  if (clean === '/store/requisitions' || clean === '/store/requests' || clean === '/store/issue') {
+    return { view: 'store-requisitions', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/store/requisitions' };
+  }
+  if (clean === '/store/instruments' || clean === '/store/custody' || clean === '/store/assets') {
+    return { view: 'store-instruments', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/store/instruments' };
+  }
+  if (clean === '/store/ledger' || clean === '/store/reports' || clean === '/store/opex') {
+    return { view: 'store-ledger', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/store/ledger' };
+  }
   // 6.2 Referrals & Commissions Sub-routes
   if (clean === '/referrals' || clean === '/referrals/directory') {
     return { view: 'referrals-directory', packageTab: 'list', addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/referrals/directory' };
@@ -265,6 +290,10 @@ export function getCanonicalPathFromState(
   addPackage: boolean
 ): string {
   switch (view) {
+    case 'login':
+      return '/login';
+    case 'dashboard':
+      return '/dashboard';
     case 'appointments':
       return '/crm/appointments';
     case 'call-center':
@@ -317,6 +346,15 @@ export function getCanonicalPathFromState(
       return '/inventory/adjustments';
     case 'inventory-suppliers':
       return '/inventory/suppliers';
+    case 'store-stock':
+    case 'store':
+      return '/store/stock';
+    case 'store-requisitions':
+      return '/store/requisitions';
+    case 'store-instruments':
+      return '/store/instruments';
+    case 'store-ledger':
+      return '/store/ledger';
     case 'referrals-directory':
     case 'referrals':
       return '/referrals/directory';
@@ -365,7 +403,8 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authRequired, setAuthRequired] = useState<boolean>(false);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [authRequired, setAuthRequired] = useState<boolean>(true);
   const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [activeBranchId, setActiveBranchId] = useState<string>('');
@@ -376,9 +415,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   // Initialize initial route from browser URL
+  const rawInitialPath = typeof window !== 'undefined' ? window.location.pathname : '/';
   const initialResolved = typeof window !== 'undefined'
-    ? resolveRouteFromPath(window.location.pathname)
-    : { view: 'appointments', packageTab: 'list' as const, addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/crm/appointments' };
+    ? resolveRouteFromPath(rawInitialPath)
+    : { view: 'dashboard', packageTab: 'list' as const, addTreatment: false, addCategory: false, addPackage: false, canonicalPath: '/dashboard' };
+
+  const postLoginPathRef = useRef<string>(
+    rawInitialPath &&
+      rawInitialPath !== '/' &&
+      !rawInitialPath.toLowerCase().startsWith('/login') &&
+      !rawInitialPath.toLowerCase().startsWith('/auth/login') &&
+      !rawInitialPath.toLowerCase().startsWith('/portal')
+      ? initialResolved.canonicalPath
+      : '/dashboard'
+  );
+  const isAuthenticatedRef = useRef<boolean>(false);
+  const currentUserRef = useRef<User | null>(null);
+  currentUserRef.current = currentUser;
 
   const [currentView, setCurrentView] = useState<string>(initialResolved.view);
   const [currentPath, setCurrentPath] = useState<string>(initialResolved.canonicalPath);
@@ -389,18 +442,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [packageActiveTab, setPackageActiveTab] = useState<'list' | 'sessions' | 'create'>(initialResolved.packageTab);
   const [isAddPackageOpen, setIsAddPackageOpen] = useState(initialResolved.addPackage);
 
-  // Deep-link initial route sync & back/forward browser navigation
+  // Back/forward browser navigation with auth & RBAC route enforcement
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // Normalize URL to Option B canonical slug if initial path is root or alias
-    if (window.location.pathname !== initialResolved.canonicalPath) {
-      window.history.replaceState({ path: initialResolved.canonicalPath }, '', initialResolved.canonicalPath);
-    }
-
     const handlePopState = () => {
-      const resolved = resolveRouteFromPath(window.location.pathname);
-      if (resolved.view === 'patients' && !window.location.pathname.includes('/patients/')) {
+      const pathNow = window.location.pathname;
+      if (pathNow.toLowerCase().startsWith('/portal')) {
+        setCurrentView('portal');
+        setCurrentPath('/portal');
+        return;
+      }
+
+      if (!isAuthenticatedRef.current) {
+        if (pathNow !== '/login') {
+          window.history.replaceState({ path: '/login' }, '', '/login');
+        }
+        setCurrentView('login');
+        setCurrentPath('/login');
+        return;
+      }
+
+      const resolved = resolveRouteFromPath(pathNow);
+      const user = currentUserRef.current;
+      const defaultHome = getDefaultHomePathForUser(user);
+      if (resolved.view === 'login' || (user && !canAccessRouteState(user, resolved))) {
+        const homeResolved = resolveRouteFromPath(defaultHome);
+        window.history.replaceState({ path: homeResolved.canonicalPath }, '', homeResolved.canonicalPath);
+        setCurrentView(homeResolved.view);
+        setPackageActiveTab(homeResolved.packageTab);
+        setIsAddTreatmentOpen(homeResolved.addTreatment);
+        setIsAddCategoryOpen(homeResolved.addCategory);
+        setIsAddPackageOpen(homeResolved.addPackage);
+        setCurrentPath(homeResolved.canonicalPath);
+        return;
+      }
+
+      if (resolved.view === 'patients' && !pathNow.includes('/patients/')) {
         setSelectedPatientId(null);
       }
       setCurrentView(resolved.view);
@@ -417,7 +495,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Central Navigate function for Option 'খ' slugs
   const navigate = (targetPath: string, replace = false) => {
-    const resolved = resolveRouteFromPath(targetPath);
+    let resolved = resolveRouteFromPath(targetPath);
+
+    // Block navigating to protected routes while unauthenticated (allow /portal & /login)
+    if (!isAuthenticatedRef.current && resolved.view !== 'portal' && resolved.view !== 'login') {
+      postLoginPathRef.current = resolved.canonicalPath;
+      setCurrentView('login');
+      setCurrentPath('/login');
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.history.replaceState({ path: '/login' }, '', '/login');
+      }
+      return;
+    }
+
+    const user = currentUserRef.current;
+    if (isAuthenticatedRef.current && user) {
+      if (resolved.view === 'login' || !canAccessRouteState(user, resolved)) {
+        resolved = resolveRouteFromPath(getDefaultHomePathForUser(user));
+        replace = true;
+      }
+    }
+
     if (resolved.view === 'patients' && !targetPath.includes('/patients/')) {
       setSelectedPatientId(null);
     }
@@ -439,6 +537,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Sync URL when direct view setters are called
   const setViewWithSync = (newView: string) => {
+    if (!isAuthenticatedRef.current && newView !== 'portal' && newView !== 'login') {
+      return;
+    }
+    if (currentUserRef.current && !canAccessView(currentUserRef.current, newView)) {
+      return;
+    }
     if (newView === 'patients') {
       setSelectedPatientId(null);
     }
@@ -516,34 +620,94 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const loadAuthenticatedContext = async () => {
     const [mePayload, branchList] = await Promise.all([api.auth.meWithMeta(), api.branches.list()]);
+    isAuthenticatedRef.current = true;
+    currentUserRef.current = mePayload.user;
     setCurrentUser(mePayload.user);
     setAuthRequired(false);
     syncBranchesSelection(branchList, mePayload.user.branchId);
+    return mePayload.user;
   };
 
-  // Initialize initial user and branches
+  const resolveLandingPathForUser = (user: User, preferredPath?: string) => {
+    const defaultHome = getDefaultHomePathForUser(user);
+    if (!preferredPath || preferredPath === '/' || preferredPath.toLowerCase().startsWith('/login')) {
+      return defaultHome;
+    }
+    const resolvedTarget = resolveRouteFromPath(preferredPath);
+    return canAccessRouteState(user, resolvedTarget) ? resolvedTarget.canonicalPath : defaultHome;
+  };
+
+  // Initialize initial user and branches before unlocking workspace UI
   useEffect(() => {
+    let active = true;
     async function init() {
+      const pathNow = typeof window !== 'undefined' ? window.location.pathname : '/';
+      if (pathNow.toLowerCase().startsWith('/portal')) {
+        if (active) {
+          setIsAuthChecking(false);
+        }
+        return;
+      }
+
       try {
-        await loadAuthenticatedContext();
-      } catch (err) {
-        if (err instanceof ApiClientError && err.status === 401) {
-          setAuthRequired(true);
-          setCurrentUser(null);
+        const user = await loadAuthenticatedContext();
+        if (!active) return;
+
+        const currentSlug = typeof window !== 'undefined' ? window.location.pathname.toLowerCase().replace(/\/+$/, '') || '/' : '/';
+        const resolved = resolveRouteFromPath(currentSlug);
+        if (
+          currentSlug === '/login' ||
+          currentSlug === '/auth/login' ||
+          currentSlug === '/' ||
+          !canAccessRouteState(user, resolved)
+        ) {
+          navigate(getDefaultHomePathForUser(user), true);
         } else {
+          if (typeof window !== 'undefined' && window.location.pathname !== resolved.canonicalPath) {
+            window.history.replaceState({ path: resolved.canonicalPath }, '', resolved.canonicalPath);
+          }
+          setCurrentView(resolved.view);
+          setPackageActiveTab(resolved.packageTab);
+          setIsAddTreatmentOpen(resolved.addTreatment);
+          setIsAddCategoryOpen(resolved.addCategory);
+          setIsAddPackageOpen(resolved.addPackage);
+          setCurrentPath(resolved.canonicalPath);
+        }
+      } catch (err) {
+        if (!active) return;
+        isAuthenticatedRef.current = false;
+        currentUserRef.current = null;
+        setAuthRequired(true);
+        setCurrentUser(null);
+        setCurrentView('login');
+        setCurrentPath('/login');
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.history.replaceState({ path: '/login' }, '', '/login');
+        }
+        if (!(err instanceof ApiClientError && err.status === 401)) {
           console.error('Initialization error:', err);
+        }
+      } finally {
+        if (active) {
+          setIsAuthChecking(false);
         }
       }
     }
     init();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const login = async (identifier: string, password: string) => {
     const result = await api.auth.login(identifier, password);
+    currentUserRef.current = result.user;
     setCurrentUser(result.user);
     const needsPwdReset = Boolean(result.mustChangePassword);
+    isAuthenticatedRef.current = !needsPwdReset;
     setMustChangePassword(needsPwdReset);
     setAuthRequired(needsPwdReset);
+    setIsAuthChecking(false);
     try {
       const branchList = await api.branches.list();
       syncBranchesSelection(branchList, result.user.branchId);
@@ -552,29 +716,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setActiveBranchId(result.user.branchId);
       }
     }
+    if (!needsPwdReset) {
+      navigate(resolveLandingPathForUser(result.user, postLoginPathRef.current), true);
+    }
     return { mustChangePassword: needsPwdReset };
   };
 
   const clearMustChangePassword = () => {
+    isAuthenticatedRef.current = true;
     setMustChangePassword(false);
     setAuthRequired(false);
+    const user = currentUserRef.current;
+    navigate(user ? resolveLandingPathForUser(user, postLoginPathRef.current) : '/login', true);
   };
 
   const logout = async () => {
     try {
       await api.auth.logout();
     } finally {
+      isAuthenticatedRef.current = false;
+      currentUserRef.current = null;
+      postLoginPathRef.current = '';
       setCurrentUser(null);
       setMustChangePassword(false);
       setAuthRequired(true);
       setBranches([]);
       setActiveBranchId('');
+      setCurrentView('login');
+      setCurrentPath('/login');
+      if (typeof window !== 'undefined') {
+        window.history.replaceState({ path: '/login' }, '', '/login');
+      }
     }
   };
 
   // Keyboard shortcut Ctrl+K / Cmd+K for patient search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isAuthenticatedRef.current || !canSearchPatients(currentUserRef.current)) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsSearchOpen((prev) => !prev);
@@ -605,6 +784,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         currentUser,
         setCurrentUser,
         userRole,
+        isAuthChecking,
         authRequired,
         mustChangePassword,
         clearMustChangePassword,

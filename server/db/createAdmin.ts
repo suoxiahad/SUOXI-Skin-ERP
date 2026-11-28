@@ -78,13 +78,13 @@ export function validateStrongPassword(password: string): string | null {
 
 const SYSTEM_ROLES = [
   { id: 'super_admin', name: 'Super Admin / Managing Director', nameBn: 'সুপার অ্যাডমিন', description: 'Full unrestricted system access.', permissions: ['*'] },
-  { id: 'admin_manager', name: 'Branch Admin Manager', nameBn: 'ব্রাঞ্চ ম্যানেজার', description: 'Branch governance, reporting, inventory & commissions.', permissions: ['patients:*', 'appointments:*', 'billing:read', 'inventory:*', 'reports:read', 'users:read', 'referrals:*'] },
-  { id: 'doctor', name: 'Consultant Dermatologist / Doctor', nameBn: 'ডাক্তার / কনসালটেন্ট', description: 'Consultations, prescriptions, treatment plans & protocols.', permissions: ['patients:read', 'appointments:read', 'consultations:*', 'prescriptions:*', 'rx_protocols:*', 'sessions:*'] },
-  { id: 'receptionist', name: 'Front Desk Receptionist', nameBn: 'রিসেপশনিস্ট', description: 'Patient registration, scheduling & check-ins.', permissions: ['patients:read', 'patients:create', 'patients:update', 'appointments:*'] },
-  { id: 'therapist', name: 'Clinical Aesthetic Therapist', nameBn: 'থেরাপিস্ট', description: 'Treatment sessions & package deductions.', permissions: ['patients:read', 'packages:read', 'packages:deduct', 'sessions:*', 'appointments:read'] },
-  { id: 'cashier', name: 'Accounts & Billing Cashier', nameBn: 'ক্যাশিয়ার / একাউন্টস', description: 'POS invoicing, payments, refunds & daily closing.', permissions: ['patients:read', 'invoices:*', 'payments:*', 'packages:payment', 'daily_closing:*'] },
-  { id: 'inventory_manager', name: 'Inventory & Procurement Manager', nameBn: 'ইনভেন্টরি ম্যানেজার', description: 'Stock, batches, suppliers, purchase orders & GRN.', permissions: ['inventory:*', 'suppliers:*', 'purchase_orders:*'] },
-  { id: 'call_center', name: 'Call Center & Follow-up Executive', nameBn: 'কল সেন্টার এজেন্ট', description: 'Follow-ups, tomorrow call list & confirmation logging.', permissions: ['appointments:read', 'call_center:*', 'patients:read'] },
+  { id: 'admin_manager', name: 'Branch Admin Manager', nameBn: 'ব্রাঞ্চ ম্যানেজার', description: 'Branch governance, reporting, inventory & commissions.', permissions: ['patients:*', 'appointments:*', 'billing:read', 'inventory:*', 'store:*', 'reports:read', 'users:read', 'referrals:*'] },
+  { id: 'doctor', name: 'Consultant Dermatologist / Doctor', nameBn: 'ডাক্তার / কনসালটেন্ট', description: 'Consultations, prescriptions, treatment plans & protocols.', permissions: ['patients:read', 'appointments:read', 'consultations:*', 'prescriptions:*', 'rx_protocols:*', 'sessions:*', 'store:read', 'store:request'] },
+  { id: 'receptionist', name: 'Front Desk Receptionist', nameBn: 'রিসেপশনিস্ট', description: 'Patient registration, scheduling & check-ins.', permissions: ['patients:read', 'patients:create', 'patients:update', 'appointments:*', 'store:request'] },
+  { id: 'therapist', name: 'Clinical Aesthetic Therapist', nameBn: 'থেরাপিস্ট', description: 'Treatment sessions & package deductions.', permissions: ['patients:read', 'packages:read', 'packages:deduct', 'sessions:*', 'appointments:read', 'store:read', 'store:request'] },
+  { id: 'cashier', name: 'Accounts & Billing Cashier', nameBn: 'ক্যাশিয়ার / একাউন্টস', description: 'POS invoicing, payments, refunds & daily closing.', permissions: ['patients:read', 'invoices:*', 'payments:*', 'packages:payment', 'daily_closing:*', 'store:request'] },
+  { id: 'inventory_manager', name: 'Inventory & Procurement Manager', nameBn: 'ইনভেন্টরি ম্যানেজার', description: 'Stock, batches, suppliers, purchase orders & GRN.', permissions: ['inventory:*', 'suppliers:*', 'purchase_orders:*', 'store:*'] },
+  { id: 'call_center', name: 'Call Center & Follow-up Executive', nameBn: 'কল সেন্টার এজেন্ট', description: 'Follow-ups, tomorrow call list & confirmation logging.', permissions: ['appointments:read', 'call_center:*', 'patients:read', 'store:request'] },
 ];
 
 const PAYMENT_METHODS = [

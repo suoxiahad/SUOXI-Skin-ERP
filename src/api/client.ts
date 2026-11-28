@@ -43,6 +43,14 @@ import type {
   BackupRecord,
   ActiveSessionRecord,
   RxProtocol,
+  StoreItem,
+  StoreItemCategory,
+  StoreItemUnit,
+  StoreRequisition,
+  StoreInstrument,
+  InstrumentCondition,
+  StoreLedgerEntry,
+  StoreLedgerSummary,
 } from '../types/index.ts';
 import type {
   ReferrerDto,
@@ -149,7 +157,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
         code: `HTTP_${response.status}`,
         message:
           response.status === 502 || response.status === 503
-            ? 'সার্ভার রিস্টার্ট হচ্ছে বা সাময়িকভাবে প্রস্তুত হচ্ছে। কয়েক সেকেন্ড পর রিফ্রেশ করুন।'
+            ? 'Server is restarting or warming up. Please try again in a few seconds.'
             : `Server returned HTTP ${response.status}`,
         requestId: 'unknown',
       });
@@ -1267,6 +1275,242 @@ export const api = {
       const res = await request<any>('/api/v1/settings/sessions/revoke-all', {
         method: 'POST',
       });
+      return res.data;
+    },
+  },
+
+  store: {
+    listItems: async (params?: {
+      branchId?: string;
+      category?: string;
+      status?: string;
+      search?: string;
+    }): Promise<StoreItem[]> => {
+      const sp = new URLSearchParams();
+      if (params?.branchId) sp.set('branchId', params.branchId);
+      if (params?.category) sp.set('category', params.category);
+      if (params?.status) sp.set('status', params.status);
+      if (params?.search) sp.set('search', params.search);
+      const q = sp.toString() ? `?${sp.toString()}` : '';
+      const res = await request<StoreItem[]>(`/api/v1/store/items${q}`);
+      return res.data;
+    },
+    createItem: async (data: {
+      name: string;
+      category: StoreItemCategory;
+      subCategory?: string;
+      unit: StoreItemUnit;
+      currentStock: number;
+      reorderLevel: number;
+      unitCostBDT: number;
+      vendorName?: string;
+      storageLocation?: string;
+      branchId?: string;
+    }): Promise<StoreItem> => {
+      const res = await request<StoreItem>('/api/v1/store/items', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    updateItem: async (
+      id: string,
+      data: Partial<
+        Pick<
+          StoreItem,
+          'name' | 'category' | 'subCategory' | 'unit' | 'reorderLevel' | 'unitCostBDT' | 'vendorName' | 'storageLocation' | 'isActive'
+        >
+      >
+    ): Promise<StoreItem> => {
+      const res = await request<StoreItem>(`/api/v1/store/items/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    stockIn: async (
+      id: string,
+      data: {
+        quantity: number;
+        unitCostBDT?: number;
+        vendorName?: string;
+        referenceNo?: string;
+        notes?: string;
+      }
+    ): Promise<{ item: StoreItem; ledgerEntry: StoreLedgerEntry }> => {
+      const res = await request<{ item: StoreItem; ledgerEntry: StoreLedgerEntry }>(
+        `/api/v1/store/items/${id}/stock-in`,
+        {
+          method: 'POST',
+          idempotent: true,
+          body: JSON.stringify(data),
+        }
+      );
+      return res.data;
+    },
+    adjustItem: async (
+      id: string,
+      data: {
+        adjustmentType: 'damaged' | 'expired' | 'wastage' | 'audit_correction';
+        quantityDelta: number;
+        reason: string;
+      }
+    ): Promise<{ item: StoreItem; ledgerEntry: StoreLedgerEntry }> => {
+      const res = await request<{ item: StoreItem; ledgerEntry: StoreLedgerEntry }>(
+        `/api/v1/store/items/${id}/adjust`,
+        {
+          method: 'POST',
+          idempotent: true,
+          body: JSON.stringify(data),
+        }
+      );
+      return res.data;
+    },
+    listRequisitions: async (params?: {
+      branchId?: string;
+      status?: string;
+    }): Promise<StoreRequisition[]> => {
+      const sp = new URLSearchParams();
+      if (params?.branchId) sp.set('branchId', params.branchId);
+      if (params?.status) sp.set('status', params.status);
+      const q = sp.toString() ? `?${sp.toString()}` : '';
+      const res = await request<StoreRequisition[]>(`/api/v1/store/requisitions${q}`);
+      return res.data;
+    },
+    createRequisition: async (data: {
+      department: string;
+      roomNumber?: string;
+      priority: 'normal' | 'urgent';
+      notes?: string;
+      branchId?: string;
+      items: Array<{ itemId: string; requestedQty: number }>;
+    }): Promise<StoreRequisition> => {
+      const res = await request<StoreRequisition>('/api/v1/store/requisitions', {
+        method: 'POST',
+        idempotent: true,
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    approveRequisition: async (
+      id: string,
+      data: {
+        decision: 'approve' | 'reject';
+        rejectionReason?: string;
+        approvedQuantities?: Record<string, number>;
+      }
+    ): Promise<StoreRequisition> => {
+      const res = await request<StoreRequisition>(`/api/v1/store/requisitions/${id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    issueRequisition: async (
+      id: string,
+      data: {
+        issueQuantities?: Record<string, number>;
+        notes?: string;
+      }
+    ): Promise<StoreRequisition> => {
+      const res = await request<StoreRequisition>(`/api/v1/store/requisitions/${id}/issue`, {
+        method: 'POST',
+        idempotent: true,
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    confirmReceipt: async (id: string): Promise<StoreRequisition> => {
+      const res = await request<StoreRequisition>(`/api/v1/store/requisitions/${id}/confirm-receipt`, {
+        method: 'POST',
+      });
+      return res.data;
+    },
+    listInstruments: async (params?: {
+      branchId?: string;
+      custodyStatus?: string;
+      condition?: string;
+      search?: string;
+    }): Promise<StoreInstrument[]> => {
+      const sp = new URLSearchParams();
+      if (params?.branchId) sp.set('branchId', params.branchId);
+      if (params?.custodyStatus) sp.set('custodyStatus', params.custodyStatus);
+      if (params?.condition) sp.set('condition', params.condition);
+      if (params?.search) sp.set('search', params.search);
+      const q = sp.toString() ? `?${sp.toString()}` : '';
+      const res = await request<StoreInstrument[]>(`/api/v1/store/instruments${q}`);
+      return res.data;
+    },
+    createInstrument: async (data: {
+      name: string;
+      category?: string;
+      serialNumber?: string;
+      purchaseCostBDT: number;
+      assignedRoom?: string;
+      assignedToUserName?: string;
+      notes?: string;
+      branchId?: string;
+    }): Promise<StoreInstrument> => {
+      const res = await request<StoreInstrument>('/api/v1/store/instruments', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    assignInstrument: async (
+      id: string,
+      data: {
+        assignedRoom: string;
+        assignedToUserId?: string;
+        assignedToUserName: string;
+        notes?: string;
+      }
+    ): Promise<StoreInstrument> => {
+      const res = await request<StoreInstrument>(`/api/v1/store/instruments/${id}/assign`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    returnInstrument: async (
+      id: string,
+      data: {
+        condition: 'good' | 'under_repair' | 'damaged';
+        notes?: string;
+      }
+    ): Promise<StoreInstrument> => {
+      const res = await request<StoreInstrument>(`/api/v1/store/instruments/${id}/return`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    updateInstrumentStatus: async (
+      id: string,
+      data: {
+        condition: InstrumentCondition;
+        notes?: string;
+      }
+    ): Promise<StoreInstrument> => {
+      const res = await request<StoreInstrument>(`/api/v1/store/instruments/${id}/status`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return res.data;
+    },
+    getLedger: async (params?: {
+      branchId?: string;
+      movementType?: string;
+      search?: string;
+    }): Promise<{ entries: StoreLedgerEntry[]; summary: StoreLedgerSummary }> => {
+      const sp = new URLSearchParams();
+      if (params?.branchId) sp.set('branchId', params.branchId);
+      if (params?.movementType) sp.set('movementType', params.movementType);
+      if (params?.search) sp.set('search', params.search);
+      const q = sp.toString() ? `?${sp.toString()}` : '';
+      const res = await request<{ entries: StoreLedgerEntry[]; summary: StoreLedgerSummary }>(
+        `/api/v1/store/ledger${q}`
+      );
       return res.data;
     },
   },

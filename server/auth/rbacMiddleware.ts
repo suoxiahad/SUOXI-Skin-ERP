@@ -10,7 +10,7 @@ import { getRequestAuthUser } from './requestContext.ts';
 import { isPostgresConfigured, pgQuery } from '../db/pgPool.ts';
 import { sendPgError } from '../repositories/pgHelpers.ts';
 
-const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
+export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
   super_admin: ['*'],
   admin_manager: [
     'patients:*',
@@ -36,6 +36,8 @@ const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
     'settings:read',
     'audit:read',
     'files:*',
+    'portal_accounts:*',
+    'store:*',
   ],
   doctor: [
     'patients:read',
@@ -51,6 +53,8 @@ const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
     'files:read',
     'files:upload',
     'reports:read',
+    'store:read',
+    'store:request',
   ],
   receptionist: [
     'patients:read',
@@ -65,6 +69,7 @@ const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
     'files:read',
     'files:upload',
     'portal_accounts:*',
+    'store:request',
   ],
   therapist: [
     'patients:read',
@@ -76,6 +81,8 @@ const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
     'inventory:read',
     'files:read',
     'files:upload',
+    'store:read',
+    'store:request',
   ],
   cashier: [
     'patients:read',
@@ -89,21 +96,27 @@ const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
     'packages:create',
     'packages:payment',
     'daily_closing:*',
+    'referrals:read',
+    'referrals:payout',
     'reports:read',
+    'store:request',
   ],
   inventory_manager: [
     'inventory:*',
     'suppliers:*',
     'purchase_orders:*',
     'reports:read',
+    'store:*',
   ],
   call_center: [
     'patients:read',
     'appointments:read',
+    'appointments:create',
     'appointments:update',
     'call_center:*',
     'notifications:read',
     'notifications:send',
+    'store:request',
   ],
   patient: [],
 };

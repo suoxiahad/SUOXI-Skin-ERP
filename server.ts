@@ -13,9 +13,15 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { z } from 'zod';
 import { isDemoRoleSwitcherAllowed, isProductionAuthEnabled } from './server/auth/productionAuth.ts';
+import { hasPermissionCode, ROLE_DEFAULT_PERMISSIONS } from './server/auth/rbacMiddleware.ts';
 import { getRequestAuthUser } from './server/auth/requestContext.ts';
 import { checkRedisHealth, closeRedis, isRedisConfigured } from './server/cache/redisClient.ts';
-import { assertProductionSecurityOrThrow, isHostedFallbackWithoutDb, maskSecret } from './server/config/securityConfig.ts';
+import {
+  assertProductionSecurityOrThrow,
+  isCloudRunRuntime,
+  isHostedFallbackWithoutDb,
+  maskSecret,
+} from './server/config/securityConfig.ts';
 import { checkPgHealth, closePgPool, isPostgresConfigured } from './server/db/pgPool.ts';
 import { closeClinicQueue, getQueueStats, startClinicWorker } from './server/queue/jobQueue.ts';
 import {
@@ -24,6 +30,7 @@ import {
   issuePersistentCsrfToken,
   validatePersistentCsrfToken,
 } from './server/repositories/pgSecurityStoreRepo.ts';
+import { createPgClinicStoreRouter } from './server/routes/pgClinicStoreRoutes.ts';
 import { createPgCoreRouter } from './server/routes/pgCoreRoutes.ts';
 import { createPgExtendedRouter } from './server/routes/pgExtendedRoutes.ts';
 import { createPgOpsRouter } from './server/routes/pgOpsRoutes.ts';
@@ -71,6 +78,14 @@ import type {
   BackupRecord,
   ActiveSessionRecord,
   RxProtocol,
+  StoreItem,
+  StoreRequisition,
+  StoreRequisitionItem,
+  StoreInstrument,
+  StoreLedgerEntry,
+  StoreLedgerSummary,
+  InstrumentCondition,
+  InstrumentCustodyStatus,
 } from './src/types/index.ts';
 import { appointmentService } from './apps/api/src/services/appointmentService.js';
 import { patientService } from './apps/api/src/services/patientService.js';
@@ -2526,6 +2541,386 @@ const goodsReceivedNotes: GoodsReceivedNote[] = [
   }
 ];
 
+const storeItems: StoreItem[] = [
+  {
+    id: 'str-item-1',
+    itemCode: 'STR-HYG-001',
+    name: 'Alcohol Hand Sanitizer Pump (500ml)',
+    category: 'Clinical & Hygiene Consumables',
+    subCategory: 'Sanitization',
+    unit: 'bottles',
+    currentStock: 34,
+    reorderLevel: 10,
+    unitCostBDT: 260,
+    vendorName: 'Square Hygiene Supplies',
+    storageLocation: 'Rack A1 · Central Store',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'in_stock',
+    isActive: true,
+    createdAt: '2026-10-05T09:00:00Z',
+    updatedAt: '2026-11-20T11:00:00Z',
+  },
+  {
+    id: 'str-item-2',
+    itemCode: 'STR-HYG-002',
+    name: 'Soft Facial Tissue Box (200 Pulls)',
+    category: 'Clinical & Hygiene Consumables',
+    subCategory: 'Patient Comfort',
+    unit: 'boxes',
+    currentStock: 48,
+    reorderLevel: 15,
+    unitCostBDT: 95,
+    vendorName: 'Bashundhara Paper Distribution',
+    storageLocation: 'Rack A2 · Central Store',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'in_stock',
+    isActive: true,
+    createdAt: '2026-10-05T09:05:00Z',
+    updatedAt: '2026-11-22T14:20:00Z',
+  },
+  {
+    id: 'str-item-3',
+    itemCode: 'STR-HYG-003',
+    name: 'Nitrile Examination Gloves (Powder-Free, M)',
+    category: 'Clinical & Hygiene Consumables',
+    subCategory: 'PPE & Protection',
+    unit: 'boxes',
+    currentStock: 7,
+    reorderLevel: 8,
+    unitCostBDT: 580,
+    vendorName: 'MedCare Disposables BD',
+    storageLocation: 'Rack B1 · Sterile Shelf',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'low_stock',
+    isActive: true,
+    createdAt: '2026-10-08T10:00:00Z',
+    updatedAt: '2026-11-25T16:10:00Z',
+  },
+  {
+    id: 'str-item-4',
+    itemCode: 'STR-HYG-004',
+    name: 'Sterile Alcohol Prep Pads (100s Pack)',
+    category: 'Clinical & Hygiene Consumables',
+    subCategory: 'Disinfection',
+    unit: 'packs',
+    currentStock: 26,
+    reorderLevel: 8,
+    unitCostBDT: 145,
+    vendorName: 'MedCare Disposables BD',
+    storageLocation: 'Rack B2 · Sterile Shelf',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'in_stock',
+    isActive: true,
+    createdAt: '2026-10-10T10:00:00Z',
+    updatedAt: '2026-11-24T12:00:00Z',
+  },
+  {
+    id: 'str-item-5',
+    itemCode: 'STR-INS-005',
+    name: 'Laser Safety Protective Goggles (Operator & Patient)',
+    category: 'Clinical Instruments & Tools',
+    subCategory: 'Laser Protection',
+    unit: 'pieces',
+    currentStock: 6,
+    reorderLevel: 3,
+    unitCostBDT: 1850,
+    vendorName: 'BioAesthetic Devices & Consumables BD',
+    storageLocation: 'Cabinet C1 · Instrument Vault',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'in_stock',
+    isActive: true,
+    createdAt: '2026-10-12T11:30:00Z',
+    updatedAt: '2026-11-18T10:15:00Z',
+  },
+  {
+    id: 'str-item-6',
+    itemCode: 'STR-OFC-006',
+    name: 'Matador Ballpoint Pen (Blue & Black Ink)',
+    category: 'Office & Front-Desk Supplies',
+    subCategory: 'Writing Stationery',
+    unit: 'pieces',
+    currentStock: 85,
+    reorderLevel: 25,
+    unitCostBDT: 12,
+    vendorName: 'Dhaka Stationery Mart',
+    storageLocation: 'Drawer D1 · Admin Store',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'in_stock',
+    isActive: true,
+    createdAt: '2026-10-14T09:15:00Z',
+    updatedAt: '2026-11-21T15:00:00Z',
+  },
+  {
+    id: 'str-item-7',
+    itemCode: 'STR-OFC-007',
+    name: 'SUOXI Printed Prescription Pad (A5 Bond)',
+    category: 'Office & Front-Desk Supplies',
+    subCategory: 'Clinical Stationery',
+    unit: 'packs',
+    currentStock: 4,
+    reorderLevel: 5,
+    unitCostBDT: 340,
+    vendorName: 'PrintCraft Dhaka',
+    storageLocation: 'Drawer D2 · Admin Store',
+    isSellable: false,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    status: 'low_stock',
+    isActive: true,
+    createdAt: '2026-10-15T12:00:00Z',
+    updatedAt: '2026-11-26T09:40:00Z',
+  },
+];
+
+const storeRequisitions: StoreRequisition[] = [
+  {
+    id: 'str-req-1',
+    reqNumber: 'REQ-2026-0001',
+    department: 'Consultation Desk',
+    roomNumber: 'Room 201 (Dr. Samira)',
+    priority: 'normal',
+    status: 'pending',
+    requestedById: 'usr-102',
+    requestedByName: 'Dr. Samira Rahman',
+    requestedByRole: 'doctor',
+    notes: 'Running low on facial tissue and sanitizer for morning consultation rounds.',
+    items: [
+      {
+        itemId: 'str-item-1',
+        itemCode: 'STR-HYG-001',
+        itemName: 'Alcohol Hand Sanitizer Pump (500ml)',
+        category: 'Clinical & Hygiene Consumables',
+        unit: 'bottles',
+        requestedQty: 2,
+        approvedQty: 2,
+        issuedQty: 0,
+        unitCostBDT: 260,
+      },
+      {
+        itemId: 'str-item-2',
+        itemCode: 'STR-HYG-002',
+        itemName: 'Soft Facial Tissue Box (200 Pulls)',
+        category: 'Clinical & Hygiene Consumables',
+        unit: 'boxes',
+        requestedQty: 4,
+        approvedQty: 4,
+        issuedQty: 0,
+        unitCostBDT: 95,
+      },
+      {
+        itemId: 'str-item-6',
+        itemCode: 'STR-OFC-006',
+        itemName: 'Matador Ballpoint Pen (Blue & Black Ink)',
+        category: 'Office & Front-Desk Supplies',
+        unit: 'pieces',
+        requestedQty: 5,
+        approvedQty: 5,
+        issuedQty: 0,
+        unitCostBDT: 12,
+      },
+    ],
+    totalEstimatedCostBDT: 960,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-11-27T04:15:00Z',
+    updatedAt: '2026-11-27T04:15:00Z',
+  },
+  {
+    id: 'str-req-2',
+    reqNumber: 'REQ-2026-0002',
+    department: 'Reception & Front Desk',
+    roomNumber: 'Main Lobby Desk',
+    priority: 'urgent',
+    status: 'issued',
+    requestedById: 'usr-103',
+    requestedByName: 'Tania Sultana',
+    requestedByRole: 'receptionist',
+    approvedByName: 'Sharmin Sultana',
+    approvedAt: '2026-11-26T05:10:00Z',
+    issuedByName: 'Sharmin Sultana',
+    issuedAt: '2026-11-26T05:25:00Z',
+    notes: 'Weekly stationery & guest counter hygiene refill.',
+    items: [
+      {
+        itemId: 'str-item-6',
+        itemCode: 'STR-OFC-006',
+        itemName: 'Matador Ballpoint Pen (Blue & Black Ink)',
+        category: 'Office & Front-Desk Supplies',
+        unit: 'pieces',
+        requestedQty: 10,
+        approvedQty: 10,
+        issuedQty: 10,
+        unitCostBDT: 12,
+      },
+      {
+        itemId: 'str-item-2',
+        itemCode: 'STR-HYG-002',
+        itemName: 'Soft Facial Tissue Box (200 Pulls)',
+        category: 'Clinical & Hygiene Consumables',
+        unit: 'boxes',
+        requestedQty: 3,
+        approvedQty: 3,
+        issuedQty: 3,
+        unitCostBDT: 95,
+      },
+    ],
+    totalEstimatedCostBDT: 405,
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-11-26T04:50:00Z',
+    updatedAt: '2026-11-26T05:25:00Z',
+  },
+];
+
+const storeInstruments: StoreInstrument[] = [
+  {
+    id: 'str-inst-1',
+    assetTag: 'AST-INS-001',
+    itemId: 'str-item-5',
+    name: 'Heine Delta 20T Clinical Dermascope',
+    category: 'Diagnostic Instruments',
+    serialNumber: 'HD20T-88412',
+    condition: 'in_use',
+    custodyStatus: 'assigned',
+    assignedRoom: 'Consultation Room 201',
+    assignedToUserId: 'usr-102',
+    assignedToUserName: 'Dr. Samira Rahman',
+    assignedAt: '2026-11-01T09:30:00Z',
+    purchaseCostBDT: 42000,
+    lastServiceDate: '2026-10-15',
+    notes: 'Polarized LED dermoscopy unit calibrated.',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-09-10T08:00:00Z',
+    updatedAt: '2026-11-01T09:30:00Z',
+  },
+  {
+    id: 'str-inst-2',
+    assetTag: 'AST-INS-002',
+    name: 'MDF Aneroid BP Apparatus & Stethoscope Set',
+    category: 'Vital Diagnostics',
+    serialNumber: 'MDF-BP-4190',
+    condition: 'in_use',
+    custodyStatus: 'assigned',
+    assignedRoom: 'Triage & Nurse Station',
+    assignedToUserId: 'usr-103',
+    assignedToUserName: 'Front Desk Triage',
+    assignedAt: '2026-11-10T10:00:00Z',
+    purchaseCostBDT: 3800,
+    lastServiceDate: '2026-10-20',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-09-12T08:00:00Z',
+    updatedAt: '2026-11-10T10:00:00Z',
+  },
+  {
+    id: 'str-inst-3',
+    assetTag: 'AST-INS-003',
+    name: 'Stainless Micro-Surgical Forceps & Comedone Extractor Kit',
+    category: 'Procedural Tools',
+    serialNumber: 'SS-KIT-204',
+    condition: 'good',
+    custodyStatus: 'in_store',
+    purchaseCostBDT: 2400,
+    lastServiceDate: '2026-11-22',
+    notes: 'Autoclaved and sealed in sterile tray.',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-09-18T08:00:00Z',
+    updatedAt: '2026-11-22T16:00:00Z',
+  },
+  {
+    id: 'str-inst-4',
+    assetTag: 'AST-INS-004',
+    name: 'RF Electrocautery Handpiece #2',
+    category: 'Procedural Devices',
+    serialNumber: 'RFC-1094',
+    condition: 'under_repair',
+    custodyStatus: 'maintenance',
+    purchaseCostBDT: 16500,
+    lastServiceDate: '2026-08-14',
+    notes: 'Foot-pedal connector loose; sent to biomedical technician.',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-11-24T13:10:00Z',
+  },
+];
+
+const storeLedgerEntries: StoreLedgerEntry[] = [
+  {
+    id: 'str-ldg-1',
+    itemId: 'str-item-1',
+    itemCode: 'STR-HYG-001',
+    itemName: 'Alcohol Hand Sanitizer Pump (500ml)',
+    category: 'Clinical & Hygiene Consumables',
+    movementType: 'stock_in',
+    quantityDelta: 40,
+    balanceAfter: 40,
+    unitCostBDT: 260,
+    totalValueBDT: 10400,
+    department: 'Central Store',
+    referenceNo: 'STK-IN-2026-11',
+    reason: 'Monthly hygiene supply procurement from Square Hygiene Supplies',
+    performedByName: 'Sharmin Sultana',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-11-04T10:00:00Z',
+  },
+  {
+    id: 'str-ldg-2',
+    itemId: 'str-item-6',
+    itemCode: 'STR-OFC-006',
+    itemName: 'Matador Ballpoint Pen (Blue & Black Ink)',
+    category: 'Office & Front-Desk Supplies',
+    movementType: 'internal_issue',
+    quantityDelta: -10,
+    balanceAfter: 85,
+    unitCostBDT: 12,
+    totalValueBDT: 120,
+    department: 'Reception & Front Desk',
+    roomNumber: 'Main Lobby Desk',
+    referenceNo: 'REQ-2026-0002',
+    reason: 'Issued against REQ-2026-0002 to Reception & Front Desk',
+    performedByName: 'Sharmin Sultana',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-11-26T05:25:00Z',
+  },
+  {
+    id: 'str-ldg-3',
+    itemId: 'str-item-2',
+    itemCode: 'STR-HYG-002',
+    itemName: 'Soft Facial Tissue Box (200 Pulls)',
+    category: 'Clinical & Hygiene Consumables',
+    movementType: 'internal_issue',
+    quantityDelta: -3,
+    balanceAfter: 48,
+    unitCostBDT: 95,
+    totalValueBDT: 285,
+    department: 'Reception & Front Desk',
+    roomNumber: 'Main Lobby Desk',
+    referenceNo: 'REQ-2026-0002',
+    reason: 'Issued against REQ-2026-0002 to Reception & Front Desk',
+    performedByName: 'Sharmin Sultana',
+    branchId: 'br-shantinagar',
+    branchName: 'Shantinagar',
+    createdAt: '2026-11-26T05:25:00Z',
+  },
+];
+
 const stockAdjustments: StockAdjustment[] = [
   {
     id: 'stk-adj-1',
@@ -3578,6 +3973,12 @@ app.use(
 // -------------------------------------------------------------
 
 app.get('/api/v1/auth/me', (req, res) => {
+  const withDefaultPermissions = (user: User): User => ({
+    ...user,
+    permissions: Array.from(
+      new Set([...(ROLE_DEFAULT_PERMISSIONS[user.role] || []), ...(user.permissions || [])])
+    ),
+  });
   if ((process.env.NODE_ENV !== 'production' || isHostedFallbackWithoutDb()) && !isPostgresConfigured()) {
     const cookies = parseCookieHeader(req.headers.cookie);
     const sid = cookies[PREVIEW_SESSION_COOKIE_NAME];
@@ -3585,9 +3986,17 @@ app.get('/api/v1/auth/me', (req, res) => {
     if (!previewUser) {
       return sendError(res, 401, 'AUTH_REQUIRED', 'Authentication required. Please sign in.');
     }
-    return sendSuccess(res, { user: previewUser, authMode: 'preview_demo', allowRoleSwitcher: true });
+    return sendSuccess(res, {
+      user: withDefaultPermissions(previewUser),
+      authMode: 'preview_demo',
+      allowRoleSwitcher: true,
+    });
   }
-  return sendSuccess(res, { user: currentUser, authMode: 'preview_demo', allowRoleSwitcher: false });
+  return sendSuccess(res, {
+    user: withDefaultPermissions(currentUser),
+    authMode: 'preview_demo',
+    allowRoleSwitcher: false,
+  });
 });
 
 // Phase 2: Mount PostgreSQL Core Clinical & Financial Router (active when DATABASE_URL is configured)
@@ -3606,6 +4015,15 @@ app.use(
     checkIdempotency,
     saveIdempotency,
     getServerOutgoingIp: () => getServerOutgoingIp(),
+  })
+);
+
+// Standalone Clinic Store PostgreSQL Router (Non-Sellable Supplies, Requisitions, Instruments Custody, OPEX Ledger)
+app.use(
+  createPgClinicStoreRouter({
+    getCurrentUser: () => getRequestAuthUser() || currentUser,
+    checkIdempotency,
+    saveIdempotency,
   })
 );
 
@@ -6292,6 +6710,733 @@ app.post('/api/v1/inventory/purchases/:id/receive', (req, res) => {
 });
 
 // -------------------------------------------------------------
+// Endpoints: Standalone Clinic Store (Preview Fallback)
+// -------------------------------------------------------------
+
+function getActorPermissions(user: User): string[] {
+  return Array.from(new Set([...(ROLE_DEFAULT_PERMISSIONS[user.role] || []), ...(user.permissions || [])]));
+}
+
+function requirePreviewStorePermission(codes: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const actor = getRequestAuthUser() || currentUser;
+    if (!actor) return sendError(res, 401, 'AUTH_REQUIRED', 'Authentication required');
+    const granted = getActorPermissions(actor);
+    if (!codes.some((c) => hasPermissionCode(granted, c))) {
+      return sendError(res, 403, 'FORBIDDEN', `Missing required store permission (${codes.join(' or ')})`);
+    }
+    return next();
+  };
+}
+
+function computePreviewStoreStatus(stock: number, reorderLevel: number): StoreItem['status'] {
+  if (stock <= 0) return 'out_of_stock';
+  if (stock <= reorderLevel) return 'low_stock';
+  return 'in_stock';
+}
+
+app.get(
+  '/api/v1/store/items',
+  requirePreviewStorePermission(['store:read', 'store:request', 'store:manage', 'store:*']),
+  (req, res) => {
+    const actor = getRequestAuthUser() || currentUser;
+    const { branchId, category, status, search } = req.query;
+    let list = storeItems.filter((i) => i.isActive);
+    if (branchId && branchId !== 'all') list = list.filter((i) => i.branchId === branchId);
+    if (category && category !== 'all') list = list.filter((i) => i.category === category);
+    if (status && status !== 'all') list = list.filter((i) => i.status === status);
+    if (search && String(search).trim()) {
+      const q = String(search).trim().toLowerCase();
+      list = list.filter(
+        (i) =>
+          i.name.toLowerCase().includes(q) ||
+          i.itemCode.toLowerCase().includes(q) ||
+          (i.subCategory && i.subCategory.toLowerCase().includes(q)) ||
+          (i.vendorName && i.vendorName.toLowerCase().includes(q))
+      );
+    }
+    const granted = getActorPermissions(actor);
+    const canSeeCost = hasPermissionCode(granted, 'store:manage') || hasPermissionCode(granted, 'store:reports');
+    const out = canSeeCost ? list : list.map((it) => ({ ...it, unitCostBDT: 0 }));
+    return sendSuccess(res, out, { total: out.length });
+  }
+);
+
+app.post(
+  '/api/v1/store/items',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  (req, res) => {
+    const schema = z.object({
+      name: z.string().min(2),
+      category: z.enum(['Clinical & Hygiene Consumables', 'Clinical Instruments & Tools', 'Office & Front-Desk Supplies']),
+      subCategory: z.string().optional(),
+      unit: z.enum(['pieces', 'boxes', 'bottles', 'packs', 'reams', 'sets', 'rolls']).default('pieces'),
+      currentStock: z.number().int().min(0).default(0),
+      reorderLevel: z.number().int().min(0).default(5),
+      unitCostBDT: z.number().min(0).default(0),
+      vendorName: z.string().optional(),
+      storageLocation: z.string().optional(),
+      branchId: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid Clinic Store item payload', parsed.error.format());
+
+    const actor = getRequestAuthUser() || currentUser;
+    const d = parsed.data;
+    const targetBranch = resolvePrototypeBranch(d.branchId || actor.branchId);
+    const seq = String(storeItems.length + 1).padStart(3, '0');
+    const catCode = d.category.includes('Instrument') ? 'INS' : d.category.includes('Office') ? 'OFC' : 'HYG';
+    const now = new Date().toISOString();
+    const created: StoreItem = {
+      id: `str-item-${Date.now()}`,
+      itemCode: `STR-${catCode}-${seq}`,
+      name: d.name.trim(),
+      category: d.category,
+      subCategory: d.subCategory?.trim() || undefined,
+      unit: d.unit,
+      currentStock: d.currentStock,
+      reorderLevel: d.reorderLevel,
+      unitCostBDT: d.unitCostBDT,
+      vendorName: d.vendorName?.trim() || undefined,
+      storageLocation: d.storageLocation?.trim() || undefined,
+      isSellable: false,
+      branchId: targetBranch.id,
+      branchName: targetBranch.name,
+      status: computePreviewStoreStatus(d.currentStock, d.reorderLevel),
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    storeItems.unshift(created);
+    if (created.currentStock > 0) {
+      storeLedgerEntries.unshift({
+        id: `str-ldg-${Date.now()}`,
+        itemId: created.id,
+        itemCode: created.itemCode,
+        itemName: created.name,
+        category: created.category,
+        movementType: 'stock_in',
+        quantityDelta: created.currentStock,
+        balanceAfter: created.currentStock,
+        unitCostBDT: created.unitCostBDT,
+        totalValueBDT: Number((created.currentStock * created.unitCostBDT).toFixed(2)),
+        department: 'Central Store',
+        referenceNo: created.itemCode,
+        reason: 'Initial Clinic Store opening stock',
+        performedByName: actor.name,
+        branchId: created.branchId,
+        branchName: created.branchName,
+        createdAt: now,
+      });
+    }
+    logAuditEvent('STORE_ITEM_CREATED', 'clinic_store', created.id, `Added Clinic Store item ${created.name} (${created.itemCode})`);
+    return sendSuccess(res, created, {}, 201);
+  }
+);
+
+app.patch(
+  '/api/v1/store/items/:id',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  (req, res) => {
+    const item = storeItems.find((i) => i.id === req.params.id);
+    if (!item) return sendError(res, 404, 'NOT_FOUND', 'Clinic Store item not found');
+    const raw = req.body || {};
+    if (raw.name !== undefined) item.name = String(raw.name);
+    if (raw.category !== undefined) item.category = raw.category;
+    if (raw.subCategory !== undefined) item.subCategory = raw.subCategory;
+    if (raw.unit !== undefined) item.unit = raw.unit;
+    if (raw.reorderLevel !== undefined) item.reorderLevel = Number(raw.reorderLevel);
+    if (raw.unitCostBDT !== undefined) item.unitCostBDT = Number(raw.unitCostBDT);
+    if (raw.vendorName !== undefined) item.vendorName = raw.vendorName;
+    if (raw.storageLocation !== undefined) item.storageLocation = raw.storageLocation;
+    if (raw.isActive !== undefined) item.isActive = Boolean(raw.isActive);
+    item.status = computePreviewStoreStatus(item.currentStock, item.reorderLevel);
+    item.updatedAt = new Date().toISOString();
+    return sendSuccess(res, item);
+  }
+);
+
+app.post(
+  '/api/v1/store/items/:id/stock-in',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  checkIdempotency,
+  (req, res) => {
+    const schema = z.object({
+      quantity: z.number().int().positive(),
+      unitCostBDT: z.number().min(0).optional(),
+      vendorName: z.string().optional(),
+      referenceNo: z.string().optional(),
+      notes: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid stock-in payload', parsed.error.format());
+    const item = storeItems.find((i) => i.id === req.params.id);
+    if (!item) return sendError(res, 404, 'NOT_FOUND', 'Clinic Store item not found');
+    const actor = getRequestAuthUser() || currentUser;
+    const d = parsed.data;
+    item.currentStock += d.quantity;
+    if (d.unitCostBDT !== undefined) item.unitCostBDT = d.unitCostBDT;
+    if (d.vendorName?.trim()) item.vendorName = d.vendorName.trim();
+    item.status = computePreviewStoreStatus(item.currentStock, item.reorderLevel);
+    item.updatedAt = new Date().toISOString();
+
+    const ledgerEntry: StoreLedgerEntry = {
+      id: `str-ldg-${Date.now()}`,
+      itemId: item.id,
+      itemCode: item.itemCode,
+      itemName: item.name,
+      category: item.category,
+      movementType: 'stock_in',
+      quantityDelta: d.quantity,
+      balanceAfter: item.currentStock,
+      unitCostBDT: item.unitCostBDT,
+      totalValueBDT: Number((d.quantity * item.unitCostBDT).toFixed(2)),
+      department: 'Central Store',
+      referenceNo: d.referenceNo?.trim() || `STK-IN-${Date.now().toString().slice(-4)}`,
+      reason: d.notes?.trim() || `Store purchase / restock from ${item.vendorName || 'Vendor'}`,
+      performedByName: actor.name,
+      branchId: item.branchId,
+      branchName: item.branchName,
+      createdAt: item.updatedAt,
+    };
+    storeLedgerEntries.unshift(ledgerEntry);
+    saveIdempotency(req.headers['idempotency-key'] as string, 201, { data: { item, ledgerEntry } });
+    return sendSuccess(res, { item, ledgerEntry }, {}, 201);
+  }
+);
+
+app.post(
+  '/api/v1/store/items/:id/adjust',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  checkIdempotency,
+  (req, res) => {
+    const schema = z.object({
+      adjustmentType: z.enum(['damaged', 'expired', 'wastage', 'audit_correction']),
+      quantityDelta: z.number().int().refine((v) => v !== 0, 'Quantity delta cannot be zero'),
+      reason: z.string().min(4),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid adjustment payload', parsed.error.format());
+    const item = storeItems.find((i) => i.id === req.params.id);
+    if (!item) return sendError(res, 404, 'NOT_FOUND', 'Clinic Store item not found');
+    const nextStock = item.currentStock + parsed.data.quantityDelta;
+    if (nextStock < 0) {
+      return sendError(res, 422, 'INSUFFICIENT_STOCK', `Available stock is only ${item.currentStock} ${item.unit}.`);
+    }
+    const actor = getRequestAuthUser() || currentUser;
+    item.currentStock = nextStock;
+    item.status = computePreviewStoreStatus(item.currentStock, item.reorderLevel);
+    item.updatedAt = new Date().toISOString();
+
+    const ledgerEntry: StoreLedgerEntry = {
+      id: `str-ldg-${Date.now()}`,
+      itemId: item.id,
+      itemCode: item.itemCode,
+      itemName: item.name,
+      category: item.category,
+      movementType: parsed.data.adjustmentType,
+      quantityDelta: parsed.data.quantityDelta,
+      balanceAfter: item.currentStock,
+      unitCostBDT: item.unitCostBDT,
+      totalValueBDT: Number((Math.abs(parsed.data.quantityDelta) * item.unitCostBDT).toFixed(2)),
+      department: 'Central Store',
+      referenceNo: `ADJ-${Date.now().toString().slice(-5)}`,
+      reason: parsed.data.reason.trim(),
+      performedByName: actor.name,
+      branchId: item.branchId,
+      branchName: item.branchName,
+      createdAt: item.updatedAt,
+    };
+    storeLedgerEntries.unshift(ledgerEntry);
+    saveIdempotency(req.headers['idempotency-key'] as string, 201, { data: { item, ledgerEntry } });
+    return sendSuccess(res, { item, ledgerEntry }, {}, 201);
+  }
+);
+
+app.get(
+  '/api/v1/store/requisitions',
+  requirePreviewStorePermission(['store:request', 'store:manage', 'store:*']),
+  (req, res) => {
+    const actor = getRequestAuthUser() || currentUser;
+    const granted = getActorPermissions(actor);
+    const isManager = hasPermissionCode(granted, 'store:manage');
+    const { branchId, status } = req.query;
+    let list = [...storeRequisitions];
+    if (branchId && branchId !== 'all') list = list.filter((r) => r.branchId === branchId);
+    if (status && status !== 'all') list = list.filter((r) => r.status === status);
+    if (!isManager) {
+      list = list
+        .filter((r) => r.requestedById === actor.id)
+        .map((r) => ({
+          ...r,
+          totalEstimatedCostBDT: 0,
+          items: r.items.map((it) => ({ ...it, unitCostBDT: 0 })),
+        }));
+    }
+    return sendSuccess(res, list, { total: list.length });
+  }
+);
+
+app.post(
+  '/api/v1/store/requisitions',
+  requirePreviewStorePermission(['store:request', 'store:manage', 'store:*']),
+  checkIdempotency,
+  (req, res) => {
+    const schema = z.object({
+      department: z.string().min(2),
+      roomNumber: z.string().optional(),
+      priority: z.enum(['normal', 'urgent']).default('normal'),
+      notes: z.string().optional(),
+      branchId: z.string().optional(),
+      items: z.array(z.object({ itemId: z.string().min(1), requestedQty: z.number().int().positive() })).min(1),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid requisition payload', parsed.error.format());
+    const actor = getRequestAuthUser() || currentUser;
+    const targetBranch = resolvePrototypeBranch(parsed.data.branchId || actor.branchId);
+
+    let totalCost = 0;
+    const reqItems: StoreRequisitionItem[] = [];
+    for (const line of parsed.data.items) {
+      const it = storeItems.find((s) => s.id === line.itemId);
+      if (!it) return sendError(res, 404, 'NOT_FOUND', `Store item '${line.itemId}' not found`);
+      totalCost += line.requestedQty * it.unitCostBDT;
+      reqItems.push({
+        itemId: it.id,
+        itemCode: it.itemCode,
+        itemName: it.name,
+        category: it.category,
+        unit: it.unit,
+        requestedQty: line.requestedQty,
+        approvedQty: line.requestedQty,
+        issuedQty: 0,
+        unitCostBDT: it.unitCostBDT,
+      });
+    }
+
+    const now = new Date().toISOString();
+    const created: StoreRequisition = {
+      id: `str-req-${Date.now()}`,
+      reqNumber: `REQ-2026-${String(storeRequisitions.length + 1).padStart(4, '0')}`,
+      department: parsed.data.department.trim(),
+      roomNumber: parsed.data.roomNumber?.trim() || undefined,
+      priority: parsed.data.priority,
+      status: 'pending',
+      requestedById: actor.id,
+      requestedByName: actor.name,
+      requestedByRole: actor.role,
+      notes: parsed.data.notes?.trim() || undefined,
+      items: reqItems,
+      totalEstimatedCostBDT: Number(totalCost.toFixed(2)),
+      branchId: targetBranch.id,
+      branchName: targetBranch.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    storeRequisitions.unshift(created);
+    const granted = getActorPermissions(actor);
+    const canSeeCost = hasPermissionCode(granted, 'store:manage') || hasPermissionCode(granted, 'store:reports');
+    const out = canSeeCost
+      ? created
+      : {
+          ...created,
+          totalEstimatedCostBDT: 0,
+          items: created.items.map((it) => ({ ...it, unitCostBDT: 0 })),
+        };
+    saveIdempotency(req.headers['idempotency-key'] as string, 201, { data: out });
+    return sendSuccess(res, out, {}, 201);
+  }
+);
+
+app.post(
+  '/api/v1/store/requisitions/:id/approve',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  (req, res) => {
+    const reqRecord = storeRequisitions.find((r) => r.id === req.params.id);
+    if (!reqRecord) return sendError(res, 404, 'NOT_FOUND', 'Store requisition not found');
+    if (reqRecord.status !== 'pending') {
+      return sendError(res, 422, 'INVALID_STATUS', `Requisition is already '${reqRecord.status}'`);
+    }
+    const actor = getRequestAuthUser() || currentUser;
+    const decision = req.body?.decision === 'reject' ? 'reject' : 'approve';
+    const now = new Date().toISOString();
+    reqRecord.approvedByName = actor.name;
+    reqRecord.approvedAt = now;
+    reqRecord.updatedAt = now;
+    if (decision === 'reject') {
+      reqRecord.status = 'rejected';
+      reqRecord.rejectionReason = String(req.body?.rejectionReason || 'Declined by Store Manager');
+    } else {
+      reqRecord.status = 'approved';
+      const overrides = (req.body?.approvedQuantities || {}) as Record<string, number>;
+      reqRecord.items = reqRecord.items.map((l) => ({
+        ...l,
+        approvedQty: overrides[l.itemId] !== undefined ? Math.max(0, Math.min(l.requestedQty, Number(overrides[l.itemId]))) : l.requestedQty,
+      }));
+      reqRecord.totalEstimatedCostBDT = Number(
+        reqRecord.items.reduce((sum, l) => sum + l.approvedQty * l.unitCostBDT, 0).toFixed(2)
+      );
+    }
+    return sendSuccess(res, reqRecord);
+  }
+);
+
+app.post(
+  '/api/v1/store/requisitions/:id/issue',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  checkIdempotency,
+  (req, res) => {
+    const reqRecord = storeRequisitions.find((r) => r.id === req.params.id);
+    if (!reqRecord) return sendError(res, 404, 'NOT_FOUND', 'Store requisition not found');
+    if (!['pending', 'approved', 'partially_issued'].includes(reqRecord.status)) {
+      return sendError(res, 422, 'INVALID_STATUS', `Cannot issue requisition in '${reqRecord.status}' status`);
+    }
+    const actor = getRequestAuthUser() || currentUser;
+    const overrides = (req.body?.issueQuantities || {}) as Record<string, number>;
+
+    for (const line of reqRecord.items) {
+      const remaining = Math.max(0, (line.approvedQty || line.requestedQty) - line.issuedQty);
+      const qtyToIssue = overrides[line.itemId] !== undefined ? Math.max(0, Math.min(remaining, Number(overrides[line.itemId]))) : remaining;
+      if (qtyToIssue > 0) {
+        const it = storeItems.find((s) => s.id === line.itemId);
+        if (!it) return sendError(res, 404, 'NOT_FOUND', `Store item '${line.itemName}' not found`);
+        if (it.currentStock < qtyToIssue) {
+          return sendError(res, 422, 'INSUFFICIENT_STOCK', `Insufficient stock for ${it.name} (Available: ${it.currentStock})`);
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+    let anyIssued = false;
+    reqRecord.items = reqRecord.items.map((line) => {
+      const remaining = Math.max(0, (line.approvedQty || line.requestedQty) - line.issuedQty);
+      const qtyToIssue = overrides[line.itemId] !== undefined ? Math.max(0, Math.min(remaining, Number(overrides[line.itemId]))) : remaining;
+      if (qtyToIssue <= 0) return line;
+      const it = storeItems.find((s) => s.id === line.itemId)!;
+      it.currentStock -= qtyToIssue;
+      it.status = computePreviewStoreStatus(it.currentStock, it.reorderLevel);
+      it.updatedAt = now;
+      anyIssued = true;
+
+      storeLedgerEntries.unshift({
+        id: `str-ldg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        itemId: it.id,
+        itemCode: it.itemCode,
+        itemName: it.name,
+        category: it.category,
+        movementType: 'internal_issue',
+        quantityDelta: -qtyToIssue,
+        balanceAfter: it.currentStock,
+        unitCostBDT: it.unitCostBDT,
+        totalValueBDT: Number((qtyToIssue * it.unitCostBDT).toFixed(2)),
+        department: reqRecord.department,
+        roomNumber: reqRecord.roomNumber,
+        referenceNo: reqRecord.reqNumber,
+        reason: String(req.body?.notes || '').trim() || `Issued against ${reqRecord.reqNumber} to ${reqRecord.department}`,
+        performedByName: actor.name,
+        branchId: it.branchId,
+        branchName: it.branchName,
+        createdAt: now,
+      });
+
+      return { ...line, issuedQty: line.issuedQty + qtyToIssue };
+    });
+
+    if (!anyIssued) return sendError(res, 422, 'NOTHING_TO_ISSUE', 'No positive quantity specified to issue');
+    const allIssued = reqRecord.items.every((l) => l.issuedQty >= (l.approvedQty || l.requestedQty));
+    reqRecord.status = allIssued ? 'issued' : 'partially_issued';
+    reqRecord.approvedByName = reqRecord.approvedByName || actor.name;
+    reqRecord.approvedAt = reqRecord.approvedAt || now;
+    reqRecord.issuedByName = actor.name;
+    reqRecord.issuedAt = now;
+    reqRecord.updatedAt = now;
+    saveIdempotency(req.headers['idempotency-key'] as string, 200, { data: reqRecord });
+    return sendSuccess(res, reqRecord);
+  }
+);
+
+app.post(
+  '/api/v1/store/requisitions/:id/confirm-receipt',
+  requirePreviewStorePermission(['store:request', 'store:manage', 'store:*']),
+  (req, res) => {
+    const reqRecord = storeRequisitions.find((r) => r.id === req.params.id);
+    if (!reqRecord) return sendError(res, 404, 'NOT_FOUND', 'Store requisition not found');
+    if (reqRecord.status !== 'issued' && reqRecord.status !== 'partially_issued') {
+      return sendError(res, 422, 'INVALID_STATUS', 'Only issued requisitions can be confirmed as received');
+    }
+    const actor = getRequestAuthUser() || currentUser;
+    const now = new Date().toISOString();
+    reqRecord.status = 'received';
+    reqRecord.receivedByName = actor.name;
+    reqRecord.receivedAt = now;
+    reqRecord.updatedAt = now;
+    const granted = getActorPermissions(actor);
+    const canSeeCost = hasPermissionCode(granted, 'store:manage') || hasPermissionCode(granted, 'store:reports');
+    const out = canSeeCost
+      ? reqRecord
+      : {
+          ...reqRecord,
+          totalEstimatedCostBDT: 0,
+          items: reqRecord.items.map((it) => ({ ...it, unitCostBDT: 0 })),
+        };
+    return sendSuccess(res, out);
+  }
+);
+
+app.get(
+  '/api/v1/store/instruments',
+  requirePreviewStorePermission(['store:read', 'store:manage', 'store:*']),
+  (req, res) => {
+    const actor = getRequestAuthUser() || currentUser;
+    const { branchId, custodyStatus, condition, search } = req.query;
+    let list = [...storeInstruments];
+    if (branchId && branchId !== 'all') list = list.filter((i) => i.branchId === branchId);
+    if (custodyStatus && custodyStatus !== 'all') list = list.filter((i) => i.custodyStatus === custodyStatus);
+    if (condition && condition !== 'all') list = list.filter((i) => i.condition === condition);
+    if (search && String(search).trim()) {
+      const q = String(search).trim().toLowerCase();
+      list = list.filter(
+        (i) =>
+          i.name.toLowerCase().includes(q) ||
+          i.assetTag.toLowerCase().includes(q) ||
+          (i.serialNumber && i.serialNumber.toLowerCase().includes(q)) ||
+          (i.assignedRoom && i.assignedRoom.toLowerCase().includes(q)) ||
+          (i.assignedToUserName && i.assignedToUserName.toLowerCase().includes(q))
+      );
+    }
+    const granted = getActorPermissions(actor);
+    const canSeeCost = hasPermissionCode(granted, 'store:manage') || hasPermissionCode(granted, 'store:reports');
+    const out = canSeeCost ? list : list.map((i) => ({ ...i, purchaseCostBDT: 0 }));
+    return sendSuccess(res, out, { total: out.length });
+  }
+);
+
+app.post(
+  '/api/v1/store/instruments',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  (req, res) => {
+    const schema = z.object({
+      name: z.string().min(2),
+      category: z.string().optional(),
+      serialNumber: z.string().optional(),
+      purchaseCostBDT: z.number().min(0).default(0),
+      assignedRoom: z.string().optional(),
+      assignedToUserName: z.string().optional(),
+      notes: z.string().optional(),
+      branchId: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid instrument payload', parsed.error.format());
+    const actor = getRequestAuthUser() || currentUser;
+    const d = parsed.data;
+    const branch = resolvePrototypeBranch(d.branchId || actor.branchId);
+    const isAssigned = Boolean(d.assignedRoom || d.assignedToUserName);
+    const now = new Date().toISOString();
+    const created: StoreInstrument = {
+      id: `str-inst-${Date.now()}`,
+      assetTag: `AST-INS-${String(storeInstruments.length + 1).padStart(3, '0')}`,
+      name: d.name.trim(),
+      category: d.category?.trim() || 'Clinical Instruments & Tools',
+      serialNumber: d.serialNumber?.trim() || undefined,
+      condition: isAssigned ? 'in_use' : 'good',
+      custodyStatus: isAssigned ? 'assigned' : 'in_store',
+      assignedRoom: d.assignedRoom?.trim() || undefined,
+      assignedToUserName: d.assignedToUserName?.trim() || undefined,
+      assignedAt: isAssigned ? now : undefined,
+      purchaseCostBDT: d.purchaseCostBDT,
+      notes: d.notes?.trim() || undefined,
+      branchId: branch.id,
+      branchName: branch.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    storeInstruments.unshift(created);
+    return sendSuccess(res, created, {}, 201);
+  }
+);
+
+app.post(
+  '/api/v1/store/instruments/:id/assign',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  (req, res) => {
+    const inst = storeInstruments.find((i) => i.id === req.params.id);
+    if (!inst) return sendError(res, 404, 'NOT_FOUND', 'Instrument not found');
+    if (inst.condition === 'damaged' || inst.condition === 'retired' || inst.custodyStatus === 'maintenance') {
+      return sendError(res, 422, 'INSTRUMENT_UNAVAILABLE', 'Cannot assign instrument under maintenance or damaged');
+    }
+    const actor = getRequestAuthUser() || currentUser;
+    const now = new Date().toISOString();
+    inst.custodyStatus = 'assigned';
+    inst.condition = 'in_use';
+    inst.assignedRoom = String(req.body?.assignedRoom || 'Treatment Room');
+    inst.assignedToUserId = req.body?.assignedToUserId;
+    inst.assignedToUserName = String(req.body?.assignedToUserName || actor.name);
+    inst.assignedAt = now;
+    if (req.body?.notes) inst.notes = String(req.body.notes);
+    inst.updatedAt = now;
+
+    storeLedgerEntries.unshift({
+      id: `str-ldg-${Date.now()}`,
+      itemCode: inst.assetTag,
+      itemName: inst.name,
+      category: inst.category,
+      movementType: 'instrument_assign',
+      quantityDelta: -1,
+      balanceAfter: 0,
+      unitCostBDT: inst.purchaseCostBDT,
+      totalValueBDT: inst.purchaseCostBDT,
+      department: inst.assignedToUserName,
+      roomNumber: inst.assignedRoom,
+      referenceNo: inst.assetTag,
+      reason: `Assigned custody to ${inst.assignedToUserName} (${inst.assignedRoom})`,
+      performedByName: actor.name,
+      branchId: inst.branchId,
+      branchName: inst.branchName,
+      createdAt: now,
+    });
+    return sendSuccess(res, inst);
+  }
+);
+
+app.post(
+  '/api/v1/store/instruments/:id/return',
+  requirePreviewStorePermission(['store:manage', 'store:*']),
+  (req, res) => {
+    const inst = storeInstruments.find((i) => i.id === req.params.id);
+    if (!inst) return sendError(res, 404, 'NOT_FOUND', 'Instrument not found');
+    const actor = getRequestAuthUser() || currentUser;
+    const prevRoom = inst.assignedRoom;
+    const cond = (req.body?.condition || 'good') as 'good' | 'under_repair' | 'damaged';
+    const now = new Date().toISOString();
+    inst.condition = cond;
+    inst.custodyStatus = cond === 'good' ? 'in_store' : 'maintenance';
+    inst.assignedRoom = undefined;
+    inst.assignedToUserId = undefined;
+    inst.assignedToUserName = undefined;
+    if (req.body?.notes) inst.notes = String(req.body.notes);
+    inst.updatedAt = now;
+
+    storeLedgerEntries.unshift({
+      id: `str-ldg-${Date.now()}`,
+      itemCode: inst.assetTag,
+      itemName: inst.name,
+      category: inst.category,
+      movementType: 'instrument_return',
+      quantityDelta: 1,
+      balanceAfter: 1,
+      unitCostBDT: inst.purchaseCostBDT,
+      totalValueBDT: inst.purchaseCostBDT,
+      department: 'Central Store',
+      roomNumber: prevRoom,
+      referenceNo: inst.assetTag,
+      reason: `Returned to Store (${cond})${req.body?.notes ? `: ${req.body.notes}` : ''}`,
+      performedByName: actor.name,
+      branchId: inst.branchId,
+      branchName: inst.branchName,
+      createdAt: now,
+    });
+    return sendSuccess(res, inst);
+  }
+);
+
+app.post(
+  '/api/v1/store/instruments/:id/status',
+  requirePreviewStorePermission(['store:read', 'store:manage', 'store:*']),
+  (req, res) => {
+    const inst = storeInstruments.find((i) => i.id === req.params.id);
+    if (!inst) return sendError(res, 404, 'NOT_FOUND', 'Instrument not found');
+    const actor = getRequestAuthUser() || currentUser;
+    const granted = getActorPermissions(actor);
+    const isManager = hasPermissionCode(granted, 'store:manage');
+    const condition = req.body?.condition as InstrumentCondition;
+    if (!isManager && !['under_repair', 'damaged'].includes(condition)) {
+      return sendError(res, 403, 'FORBIDDEN', 'Clinical staff can only report an instrument as damaged or needing repair');
+    }
+    inst.condition = condition;
+    if (condition === 'under_repair' || condition === 'damaged') inst.custodyStatus = 'maintenance';
+    else if (condition === 'retired') inst.custodyStatus = 'retired';
+    else if (condition === 'good') {
+      inst.custodyStatus = inst.assignedRoom ? 'assigned' : 'in_store';
+      inst.lastServiceDate = new Date().toISOString().slice(0, 10);
+    }
+    if (req.body?.notes) inst.notes = String(req.body.notes);
+    inst.updatedAt = new Date().toISOString();
+    const canSeeCost = hasPermissionCode(granted, 'store:manage') || hasPermissionCode(granted, 'store:reports');
+    return sendSuccess(res, canSeeCost ? inst : { ...inst, purchaseCostBDT: 0 });
+  }
+);
+
+app.get(
+  '/api/v1/store/ledger',
+  requirePreviewStorePermission(['store:reports', 'store:manage', 'store:*']),
+  (req, res) => {
+    const { branchId, movementType, search } = req.query;
+    let entries = [...storeLedgerEntries];
+    if (branchId && branchId !== 'all') entries = entries.filter((e) => e.branchId === branchId);
+    if (movementType && movementType !== 'all') entries = entries.filter((e) => e.movementType === movementType);
+    if (search && String(search).trim()) {
+      const q = String(search).trim().toLowerCase();
+      entries = entries.filter(
+        (e) =>
+          e.itemName.toLowerCase().includes(q) ||
+          (e.department && e.department.toLowerCase().includes(q)) ||
+          (e.referenceNo && e.referenceNo.toLowerCase().includes(q)) ||
+          e.reason.toLowerCase().includes(q)
+      );
+    }
+
+    const branchItems = branchId && branchId !== 'all' ? storeItems.filter((i) => i.branchId === branchId && i.isActive) : storeItems.filter((i) => i.isActive);
+    const branchReqs = branchId && branchId !== 'all' ? storeRequisitions.filter((r) => r.branchId === branchId) : storeRequisitions;
+    const branchInsts = branchId && branchId !== 'all' ? storeInstruments.filter((i) => i.branchId === branchId) : storeInstruments;
+
+    const deptMap = new Map<string, { department: string; costBDT: number; issueCount: number }>();
+    for (const e of entries.filter((x) => x.movementType === 'internal_issue')) {
+      const dept = e.department || 'General Clinic';
+      const cur = deptMap.get(dept) || { department: dept, costBDT: 0, issueCount: 0 };
+      cur.costBDT = Number((cur.costBDT + e.totalValueBDT).toFixed(2));
+      cur.issueCount += 1;
+      deptMap.set(dept, cur);
+    }
+
+    const catMap = new Map<string, { category: string; stockValueBDT: number; monthlyIssueBDT: number }>();
+    for (const it of branchItems) {
+      const cur = catMap.get(it.category) || { category: it.category, stockValueBDT: 0, monthlyIssueBDT: 0 };
+      cur.stockValueBDT = Number((cur.stockValueBDT + it.currentStock * it.unitCostBDT).toFixed(2));
+      catMap.set(it.category, cur);
+    }
+    for (const e of entries.filter((x) => ['internal_issue', 'damaged', 'expired', 'wastage'].includes(x.movementType))) {
+      const cur = catMap.get(e.category) || { category: e.category, stockValueBDT: 0, monthlyIssueBDT: 0 };
+      cur.monthlyIssueBDT = Number((cur.monthlyIssueBDT + e.totalValueBDT).toFixed(2));
+      catMap.set(e.category, cur);
+    }
+
+    const summary: StoreLedgerSummary = {
+      totalStockValuationBDT: Number(branchItems.reduce((s, i) => s + i.currentStock * i.unitCostBDT, 0).toFixed(2)),
+      monthlyConsumptionBDT: Number(
+        entries
+          .filter((e) => ['internal_issue', 'damaged', 'expired', 'wastage'].includes(e.movementType))
+          .reduce((s, e) => s + e.totalValueBDT, 0)
+          .toFixed(2)
+      ),
+      monthlyStockInBDT: Number(
+        entries.filter((e) => e.movementType === 'stock_in').reduce((s, e) => s + e.totalValueBDT, 0).toFixed(2)
+      ),
+      totalItemsCount: branchItems.length,
+      lowStockCount: branchItems.filter((i) => i.status === 'low_stock').length,
+      outOfStockCount: branchItems.filter((i) => i.status === 'out_of_stock').length,
+      instrumentsTotalCount: branchInsts.length,
+      instrumentsAssignedCount: branchInsts.filter((i) => i.custodyStatus === 'assigned').length,
+      instrumentsUnderRepairCount: branchInsts.filter((i) => i.condition === 'under_repair' || i.condition === 'damaged').length,
+      pendingRequisitionsCount: branchReqs.filter((r) => r.status === 'pending' || r.status === 'approved').length,
+      departmentCosts: Array.from(deptMap.values()).sort((a, b) => b.costBDT - a.costBDT),
+      categoryCosts: Array.from(catMap.values()),
+    };
+
+    return sendSuccess(res, { entries, summary }, { total: entries.length });
+  }
+);
+
+// -------------------------------------------------------------
 // Endpoints: Referrals and Commission Management (Prompt 19)
 // -------------------------------------------------------------
 
@@ -7681,7 +8826,7 @@ async function start() {
   // Central catch-all error handling middleware
   app.use(errorHandlerMiddleware as unknown as express.ErrorRequestHandler);
 
-  const HOST = process.env.HOST || '127.0.0.1';
+  const HOST = process.env.HOST || (isCloudRunRuntime() ? '0.0.0.0' : '127.0.0.1');
   const server = app.listen(PORT, HOST, () => {
     console.log(`[SUOXI CRM] Server started on http://${HOST}:${PORT}`);
     if (typeof process.send === 'function') {

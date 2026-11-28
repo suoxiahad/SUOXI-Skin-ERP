@@ -30,19 +30,30 @@ import { TableSkeleton } from '../../common/Skeleton.tsx';
 import { EmptyState } from '../../common/EmptyState.tsx';
 import { AssignPatientReferrerModal } from '../referrals/AssignPatientReferrerModal.tsx';
 import { PatientEditModal } from './PatientEditModal.tsx';
+import {
+  canBookAppointment,
+  canCreatePatient,
+  canEditPatient,
+  canManagePortalAccount,
+  canManageReferrals,
+} from '../../../utils/rbac.ts';
 
 export const PatientListView: React.FC = () => {
   const {
+    currentUser,
     selectedPatientId,
     setSelectedPatientId,
     setIsQuickBookOpen,
     setIsPatientRegistrationOpen,
     addToast,
-    language,
     navigate,
     branches,
   } = useApp();
-  const isBn = language === 'bn';
+  const allowCreatePatient = canCreatePatient(currentUser);
+  const allowEditPatient = canEditPatient(currentUser);
+  const allowBookAppointment = canBookAppointment(currentUser);
+  const allowManageReferrals = canManageReferrals(currentUser);
+  const allowManagePortal = canManagePortalAccount(currentUser);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -109,10 +120,14 @@ export const PatientListView: React.FC = () => {
         .getById(selectedPatientId)
         .then((data) => {
           setPatientDetail(data);
-          api.patients
-            .getPortalAccount(selectedPatientId)
-            .then((acc) => setPortalAccount(acc))
-            .catch(() => setPortalAccount(null));
+          if (allowManagePortal) {
+            api.patients
+              .getPortalAccount(selectedPatientId)
+              .then((acc) => setPortalAccount(acc))
+              .catch(() => setPortalAccount(null));
+          } else {
+            setPortalAccount(null);
+          }
 
           api.referrals
             .getPatientReferralHistory(selectedPatientId)
@@ -138,10 +153,7 @@ export const PatientListView: React.FC = () => {
     }
   }, [selectedPatientId]);
 
-  // =========================================================================
-  // STANDALONE PAGE: PATIENT RECORD & CLINICAL FILE (একক পেজ)
-  // =========================================================================
-  if (selectedPatientId) {
+  const renderDetailView = () => {
     if (isDetailLoading || !patientDetail) {
       return (
         <div className="space-y-6 animate-in fade-in duration-150">
@@ -152,10 +164,10 @@ export const PatientListView: React.FC = () => {
               className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shadow-2xs cursor-pointer transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>{isBn ? 'রোগী তালিকায় ফিরুন' : 'Back to Patient Directory'}</span>
+              <span>Back to Patient Directory</span>
             </button>
             <span className="text-xs text-slate-500">
-              {isBn ? 'রোগীর বিবরণ লোড হচ্ছে...' : 'Loading patient records...'}
+              Loading patient records...
             </span>
           </div>
           <div className="p-8 bg-white rounded-2xl border border-slate-200 text-center">
@@ -176,53 +188,56 @@ export const PatientListView: React.FC = () => {
               className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-2 shadow-2xs cursor-pointer transition-all hover:border-[#0DA54F]/40"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>{isBn ? 'রোগী তালিকায় ফিরুন' : 'Back to Patient Directory'}</span>
+              <span>Back to Patient Directory</span>
             </button>
             <div>
               <div className="flex items-center gap-2 text-xs text-slate-500">
-                <span>{isBn ? 'রোগী ডিরেক্টরি' : 'CRM Patient Directory'}</span>
+                <span>CRM Patient Directory</span>
                 <span>/</span>
                 <span className="font-mono text-emerald-700 font-bold">{patientDetail.patient.patientIdCode}</span>
               </div>
               <h1 className="text-xl font-bold text-slate-900 mt-0.5 flex items-center gap-2">
                 <span>{patientDetail.patient.name}</span>
-                {patientDetail.patient.nameBn && (
-                  <span className="text-sm font-normal text-slate-500">({patientDetail.patient.nameBn})</span>
-                )}
               </h1>
             </div>
           </div>
 
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => {
-                setPatientToEdit(patientDetail.patient);
-                setIsEditModalOpen(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:text-[#0DA54F] rounded-xl transition-all shadow-2xs cursor-pointer"
-            >
-              <Edit3 className="w-3.5 h-3.5 text-[#0DA54F]" />
-              <span>{isBn ? 'তথ্য পরিবর্তন / এডিট' : 'Edit Patient'}</span>
-            </button>
+            {allowEditPatient && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPatientToEdit(patientDetail.patient);
+                  setIsEditModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:text-[#0DA54F] rounded-xl transition-all shadow-2xs cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-[#0DA54F]" />
+                <span>Edit Patient</span>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => setIsAssignReferrerOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition-all shadow-2xs cursor-pointer"
-            >
-              <Percent className="w-3.5 h-3.5 text-[#0DA54F]" />
-              <span>{currentReferral ? (isBn ? 'রেফারার পরিবর্তন' : 'Change Referrer') : (isBn ? 'রেফারার যুক্ত করুন' : 'Assign Referrer')}</span>
-            </button>
+            {allowManageReferrals && (
+              <button
+                type="button"
+                onClick={() => setIsAssignReferrerOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition-all shadow-2xs cursor-pointer"
+              >
+                <Percent className="w-3.5 h-3.5 text-[#0DA54F]" />
+                <span>{currentReferral ? 'Change Referrer' : 'Assign Referrer'}</span>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => setIsQuickBookOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[#0DA54F] hover:bg-[#0b8841] text-white rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer"
-            >
-              <Calendar className="w-4 h-4" />
-              <span>{isBn ? 'সরাসরি অ্যাপয়েন্টমেন্ট বুকিং' : 'Book Appointment'}</span>
-            </button>
+            {allowBookAppointment && (
+              <button
+                type="button"
+                onClick={() => setIsQuickBookOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-[#0DA54F] hover:bg-[#0b8841] text-white rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer"
+              >
+                <Calendar className="w-4 h-4" />
+                <span>Book Appointment</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -511,23 +526,26 @@ export const PatientListView: React.FC = () => {
                   </p>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => setIsAssignReferrerOpen(true)}
-                  className="w-full py-2 px-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
-                >
-                  <Percent className="w-3.5 h-3.5 text-[#0DA54F]" />
-                  <span>{currentReferral ? 'Change Referrer' : 'Assign Referrer'}</span>
-                </button>
+                {allowManageReferrals && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAssignReferrerOpen(true)}
+                    className="w-full py-2 px-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <Percent className="w-3.5 h-3.5 text-[#0DA54F]" />
+                    <span>{currentReferral ? 'Change Referrer' : 'Assign Referrer'}</span>
+                  </button>
+                )}
               </div>
             </div>
 
             {/* Patient Portal Account */}
+            {allowManagePortal && (
             <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                   <ShieldAlert className="w-4 h-4 text-emerald-700" />
-                  <span>Patient Portal Account (portal.manage)</span>
+                  <span>Patient Portal Account</span>
                 </h3>
                 {portalAccount && (
                   <span
@@ -656,27 +674,15 @@ export const PatientListView: React.FC = () => {
                 </div>
               )}
             </div>
+            )}
           </div>
         </div>
 
-        {/* Assign / Change Patient Referrer Modal */}
-        <AssignPatientReferrerModal
-          patientId={selectedPatientId}
-          patientName={patientDetail?.patient?.name}
-          isOpen={isAssignReferrerOpen}
-          onClose={() => setIsAssignReferrerOpen(false)}
-          onSuccess={() => {
-            api.referrals
-              .getPatientReferralHistory(selectedPatientId)
-              .then((res) => setCurrentReferral(res.current))
-              .catch(() => setCurrentReferral(null));
-          }}
-        />
       </div>
     );
-  }
+  };
 
-  return (
+  const renderDirectoryView = () => (
     <div className="space-y-5">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -690,22 +696,26 @@ export const PatientListView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIsPatientRegistrationOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-all shadow-xs"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Patient Registration</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsQuickBookOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#0DA54F] hover:bg-[#0a8740] rounded-xl transition-all shadow-xs"
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>Book Appointment</span>
-          </button>
+          {allowCreatePatient && (
+            <button
+              type="button"
+              onClick={() => setIsPatientRegistrationOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-all shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Patient Registration</span>
+            </button>
+          )}
+          {allowBookAppointment && (
+            <button
+              type="button"
+              onClick={() => setIsQuickBookOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#0DA54F] hover:bg-[#0a8740] rounded-xl transition-all shadow-xs"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Book Appointment</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -799,17 +809,19 @@ export const PatientListView: React.FC = () => {
 
                     <td className="py-2.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPatientToEdit(p);
-                            setIsEditModalOpen(true);
-                          }}
-                          title={isBn ? 'তথ্য পরিবর্তন / এডিট' : 'Edit Patient'}
-                          className="p-1.5 text-slate-600 hover:text-[#0DA54F] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
+                        {allowEditPatient && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPatientToEdit(p);
+                              setIsEditModalOpen(true);
+                            }}
+                            title="Edit Patient"
+                            className="p-1.5 text-slate-600 hover:text-[#0DA54F] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setSelectedPatientId(p.id)}
@@ -826,28 +838,36 @@ export const PatientListView: React.FC = () => {
           </div>
         </div>
       )}
+    </div>
+  );
 
-      {/* Patient Edit Modal */}
-      <PatientEditModal
-        isOpen={isEditModalOpen}
-        patient={patientToEdit}
-        onClose={() => {
-          setIsEditModalOpen(false);
-          setPatientToEdit(null);
-        }}
-        onSuccess={(updated) => {
-          fetchPatients();
-          if (selectedPatientId === updated.id || patientDetail?.patient?.id === updated.id) {
-            setPatientDetail((prev: any) => (prev ? { ...prev, patient: updated } : prev));
-          }
-        }}
-      />
+  return (
+    <>
+      {selectedPatientId ? renderDetailView() : renderDirectoryView()}
+
+      {/* Patient Edit Modal (shared across directory table and patient detail view) */}
+      {allowEditPatient && (
+        <PatientEditModal
+          isOpen={isEditModalOpen}
+          patient={patientToEdit}
+          onClose={() => {
+            setIsEditModalOpen(false);
+            setPatientToEdit(null);
+          }}
+          onSuccess={(updated) => {
+            fetchPatients();
+            if (selectedPatientId === updated.id || patientDetail?.patient?.id === updated.id) {
+              setPatientDetail((prev: any) => (prev ? { ...prev, patient: updated } : prev));
+            }
+          }}
+        />
+      )}
 
       {/* Assign / Change Patient Referrer Modal */}
-      {selectedPatientId && (
+      {selectedPatientId && allowManageReferrals && (
         <AssignPatientReferrerModal
           patientId={selectedPatientId}
-          patientName={patientDetail?.patient?.fullName}
+          patientName={patientDetail?.patient?.name}
           isOpen={isAssignReferrerOpen}
           onClose={() => setIsAssignReferrerOpen(false)}
           onSuccess={() => {
@@ -858,6 +878,6 @@ export const PatientListView: React.FC = () => {
           }}
         />
       )}
-    </div>
+    </>
   );
 };

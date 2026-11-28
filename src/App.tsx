@@ -34,6 +34,10 @@ import { ProductCatalogView } from './components/modules/inventory/ProductCatalo
 import { PurchaseOrdersView } from './components/modules/inventory/PurchaseOrdersView.tsx';
 import { StockMovementLogsView } from './components/modules/inventory/StockMovementLogsView.tsx';
 import { SuppliersDirectoryView } from './components/modules/inventory/SuppliersDirectoryView.tsx';
+import { StoreStockCatalogView } from './components/modules/store/StoreStockCatalogView.tsx';
+import { StoreRequisitionsView } from './components/modules/store/StoreRequisitionsView.tsx';
+import { StoreInstrumentsView } from './components/modules/store/StoreInstrumentsView.tsx';
+import { StoreLedgerReportsView } from './components/modules/store/StoreLedgerReportsView.tsx';
 import { PatientListView } from './components/modules/patients/PatientListView.tsx';
 import { ReferralCommissionsView } from './components/modules/referrals/ReferralCommissionsView.tsx';
 import { AuditLogView } from './components/modules/audit/AuditLogView.tsx';
@@ -45,7 +49,14 @@ import { UserManagementView } from './components/modules/users/UserManagementVie
 import { SecuritySettingsView } from './components/modules/settings/SecuritySettingsView.tsx';
 import { ExecutiveDashboardView } from './components/modules/dashboard/ExecutiveDashboardView.tsx';
 import { StaffLoginView } from './components/auth/StaffLoginView.tsx';
-import { CheckCircle, AlertCircle, Info, X } from 'lucide-react';
+import {
+  canAccessRouteState,
+  canBookAppointment,
+  canCreatePatient,
+  canSearchPatients,
+  getDefaultHomePathForUser,
+} from './utils/rbac.ts';
+import { CheckCircle, AlertCircle, Info, X, ShieldAlert } from 'lucide-react';
 
 const AppContent: React.FC = () => {
   const {
@@ -61,8 +72,13 @@ const AppContent: React.FC = () => {
     setIsAddTreatmentOpen,
     isAddCategoryOpen,
     setIsAddCategoryOpen,
+    packageActiveTab,
+    isAddPackageOpen,
     navigate,
+    isAuthChecking,
     authRequired,
+    currentUser,
+    mustChangePassword,
   } = useApp();
 
   const isPortalRoute =
@@ -73,9 +89,30 @@ const AppContent: React.FC = () => {
     return <PatientPortalApp />;
   }
 
-  if (authRequired) {
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen w-full bg-[#051812] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-white">
+          <div className="w-8 h-8 rounded-full border-2 border-emerald-400/25 border-t-emerald-400 animate-spin" />
+          <p className="text-xs font-medium tracking-wide text-emerald-100/80">
+            Verifying session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authRequired || !currentUser || mustChangePassword || currentView === 'login') {
     return <StaffLoginView />;
   }
+
+  const isViewAllowed = canAccessRouteState(currentUser, {
+    view: currentView,
+    packageTab: packageActiveTab,
+    addTreatment: isAddTreatmentOpen,
+    addCategory: isAddCategoryOpen,
+    addPackage: isAddPackageOpen,
+  });
 
   const renderActiveView = () => {
     switch (currentView) {
@@ -144,6 +181,15 @@ const AppContent: React.FC = () => {
         return <StockMovementLogsView />;
       case 'inventory-suppliers':
         return <SuppliersDirectoryView />;
+      case 'store-stock':
+      case 'store':
+        return <StoreStockCatalogView />;
+      case 'store-requisitions':
+        return <StoreRequisitionsView />;
+      case 'store-instruments':
+        return <StoreInstrumentsView />;
+      case 'store-ledger':
+        return <StoreLedgerReportsView />;
       case 'referrals-directory':
       case 'referrals-commissions':
       case 'referrals-rules':
@@ -195,26 +241,51 @@ const AppContent: React.FC = () => {
 
           <main className="flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="w-full">
-              {renderActiveView()}
+              {isViewAllowed ? (
+                renderActiveView()
+              ) : (
+                <div className="max-w-lg mx-auto mt-16 bg-white rounded-2xl border border-slate-200 shadow-xs p-8 text-center space-y-4">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto text-amber-600">
+                    <ShieldAlert className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <h2 className="text-lg font-bold text-slate-900">Access Restricted</h2>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Your assigned role does not have permission to open this workspace section.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate(getDefaultHomePathForUser(currentUser), true)}
+                    className="inline-flex items-center justify-center px-5 py-2.5 rounded-xl bg-[#0DA54F] hover:bg-[#0a8740] text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                  >
+                    Go to My Workspace
+                  </button>
+                </div>
+              )}
             </div>
           </main>
         </div>
 
-        {/* Global Modals */}
-        <GlobalSearchModal />
-        <PatientRegistrationModal
-          isOpen={isPatientRegistrationOpen}
-          onClose={() => setIsPatientRegistrationOpen(false)}
-        />
-        <QuickBookModal
-          isOpen={isQuickBookOpen}
-          onClose={() => setIsQuickBookOpen(false)}
-          onSuccess={(newApt) => {
-            if (typeof window !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('appointments-updated', { detail: newApt }));
-            }
-          }}
-        />
+        {/* Global Modals (mounted only when role permissions allow) */}
+        {canSearchPatients(currentUser) && <GlobalSearchModal />}
+        {canCreatePatient(currentUser) && (
+          <PatientRegistrationModal
+            isOpen={isPatientRegistrationOpen}
+            onClose={() => setIsPatientRegistrationOpen(false)}
+          />
+        )}
+        {canBookAppointment(currentUser) && (
+          <QuickBookModal
+            isOpen={isQuickBookOpen}
+            onClose={() => setIsQuickBookOpen(false)}
+            onSuccess={(newApt) => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('appointments-updated', { detail: newApt }));
+              }
+            }}
+          />
+        )}
 
         {/* Toast Notification Container */}
         <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">

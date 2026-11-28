@@ -4,12 +4,7 @@ import {
   User,
   Phone,
   AlertCircle,
-  AlertTriangle,
-  FileText,
   Save,
-  CheckCircle2,
-  MapPin,
-  HeartPulse,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext.tsx';
 import { api } from '../../../api/client.ts';
@@ -28,11 +23,9 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { addToast, language } = useApp();
-  const isBn = language === 'bn';
+  const { addToast } = useApp();
 
   const [name, setName] = useState('');
-  const [nameBn, setNameBn] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [gender, setGender] = useState<'female' | 'male' | 'other' | 'prefer_not_to_say'>('female');
@@ -51,11 +44,22 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
     if (isOpen && patient) {
       setError(null);
       setName(patient.name || '');
-      setNameBn(patient.nameBn || '');
       setPhone(patient.phone || '');
       setEmail(patient.email || '');
-      setGender((patient.gender as any) || 'female');
-      setAge(patient.age ?? '');
+      const normalizedGender = String(patient.gender || 'female').toLowerCase();
+      setGender(
+        normalizedGender === 'male' ||
+          normalizedGender === 'female' ||
+          normalizedGender === 'other' ||
+          normalizedGender === 'prefer_not_to_say'
+          ? (normalizedGender as 'female' | 'male' | 'other' | 'prefer_not_to_say')
+          : 'female'
+      );
+      const parsedAge =
+        patient.age !== undefined && patient.age !== null && String(patient.age) !== ''
+          ? Number(patient.age)
+          : NaN;
+      setAge(!Number.isNaN(parsedAge) && parsedAge > 0 ? parsedAge : '');
       setBloodGroup(patient.bloodGroup || '');
       setAddress(patient.address || '');
       setCity(patient.city || 'Dhaka');
@@ -72,13 +76,13 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
     setError(null);
 
     if (!name.trim()) {
-      setError(isBn ? 'রোগীর নাম অবশ্যই দিতে হবে' : 'Patient name is required.');
+      setError('Patient name is required.');
       return;
     }
 
     let cleanPhone = phone.trim().replace(/[\s-]/g, '');
     if (!cleanPhone) {
-      setError(isBn ? 'মোবাইল নম্বর আবশ্যক' : 'Phone number is required.');
+      setError('Phone number is required.');
       return;
     }
 
@@ -87,11 +91,7 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
     }
 
     if (!/^\+?8801[3-9]\d{8}$/.test(cleanPhone)) {
-      setError(
-        isBn
-          ? 'সঠিক বাংলাদেশী মোবাইল নম্বর দিন (+8801XXXXXXXXX)'
-          : 'Please enter a valid Bangladesh mobile (+8801XXXXXXXXX or 01XXXXXXXXX).'
-      );
+      setError('Please enter a valid Bangladesh mobile (+8801XXXXXXXXX or 01XXXXXXXXX).');
       return;
     }
 
@@ -99,8 +99,9 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
       cleanPhone = `+${cleanPhone}`;
     }
 
-    if (age !== '' && (typeof age !== 'number' || age < 1 || age > 120)) {
-      setError(isBn ? 'সঠিক বয়স (১ - ১২০) উল্লেখ করুন' : 'Please enter a valid age between 1 and 120.');
+    const numericAge = age === '' ? undefined : Number(age);
+    if (numericAge !== undefined && (Number.isNaN(numericAge) || numericAge < 1 || numericAge > 120)) {
+      setError('Please enter a valid age between 1 and 120.');
       return;
     }
 
@@ -114,15 +115,14 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
 
       const updatePayload: Partial<Patient> = {
         name: name.trim(),
-        nameBn: nameBn.trim() || undefined,
         phone: cleanPhone,
         email: email.trim() || undefined,
-        gender: gender as any,
-        age: typeof age === 'number' ? age : undefined,
+        gender: gender as Patient['gender'],
+        age: numericAge,
         bloodGroup: bloodGroup || undefined,
         address: address.trim() || undefined,
         city: city.trim() || 'Dhaka',
-        skinType: skinType as any,
+        skinType: skinType as Patient['skinType'],
         allergies: parsedAllergies,
         medicalHistory: medicalHistory.trim() || undefined,
       };
@@ -131,10 +131,8 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
 
       addToast({
         type: 'success',
-        title: isBn ? 'তথ্য সফলভাবে সংরক্ষিত হয়েছে' : 'Patient Updated Successfully!',
-        description: isBn
-          ? `${updated.name} (${updated.patientIdCode})-এর তথ্য স্থায়ীভাবে সেভ করা হয়েছে।`
-          : `Permanent record updated for ${updated.name} (${updated.patientIdCode}).`,
+        title: 'Patient Updated Successfully',
+        description: `Permanent record updated for ${updated.name} (${updated.patientIdCode}).`,
       });
 
       if (typeof window !== 'undefined') {
@@ -162,23 +160,23 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="font-bold text-slate-900 text-base">
-                  {isBn ? 'রোগীর তথ্য পরিবর্তন ও আপডেট' : 'Edit Patient Profile'}
+                  Edit Patient Profile
                 </h2>
                 <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
                   {patient.patientIdCode}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                {isBn
-                  ? 'পরিবর্তনসমূহ স্বয়ংক্রিয়ভাবে স্থায়ীভাবে সেভ থাকবে'
-                  : 'Changes are permanently stored on server disk storage'}
+                Changes are permanently saved to the patient clinical record
               </p>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
+            aria-label="Close modal"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -198,7 +196,7 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             {/* Full Name */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'রোগীর পুরো নাম' : 'Patient Full Name'} <span className="text-rose-500">*</span>
+                Patient Full Name <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
@@ -210,24 +208,10 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
               />
             </div>
 
-            {/* Bengali Name */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'নাম (বাংলায়)' : 'Name (Bangla)'}
-              </label>
-              <input
-                type="text"
-                value={nameBn}
-                onChange={(e) => setNameBn(e.target.value)}
-                placeholder="e.g. সুমাইয়া রহমান"
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0DA54F] focus:ring-1 focus:ring-[#0DA54F]"
-              />
-            </div>
-
             {/* Phone Number */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'মোবাইল নম্বর' : 'Phone Number'} <span className="text-rose-500">*</span>
+                Phone Number <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -245,7 +229,7 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             {/* Email */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'ইমেইল অ্যাড্রেস' : 'Email Address'}
+                Email Address
               </label>
               <input
                 type="email"
@@ -259,11 +243,11 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             {/* Gender */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'লিঙ্গ' : 'Gender'} <span className="text-rose-500">*</span>
+                Gender <span className="text-rose-500">*</span>
               </label>
               <select
                 value={gender}
-                onChange={(e) => setGender(e.target.value as any)}
+                onChange={(e) => setGender(e.target.value as 'female' | 'male' | 'other' | 'prefer_not_to_say')}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0DA54F] focus:ring-1 focus:ring-[#0DA54F] bg-white capitalize"
               >
                 <option value="female">Female</option>
@@ -276,14 +260,22 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             {/* Age */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'বয়স (বছর)' : 'Age (Years)'}
+                Age (Years)
               </label>
               <input
                 type="number"
                 min="1"
                 max="120"
                 value={age}
-                onChange={(e) => setAge(e.target.value ? parseInt(e.target.value, 10) : '')}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) {
+                    setAge('');
+                    return;
+                  }
+                  const num = Number.parseInt(val, 10);
+                  setAge(Number.isNaN(num) ? '' : num);
+                }}
                 placeholder="e.g. 28"
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0DA54F] focus:ring-1 focus:ring-[#0DA54F]"
               />
@@ -292,7 +284,7 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             {/* Blood Group */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'রক্তের গ্রুপ' : 'Blood Group'}
+                Blood Group
               </label>
               <select
                 value={bloodGroup}
@@ -312,9 +304,9 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
             </div>
 
             {/* Skin Type */}
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'স্কিন টাইপ' : 'Skin Type'}
+                Skin Type
               </label>
               <select
                 value={skinType}
@@ -334,20 +326,20 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'ঠিকানা ও এলাকা' : 'Street Address / Area'}
+                Street Address / Area
               </label>
               <input
                 type="text"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                placeholder="House 42, Road 7, Dhanmondi"
+                placeholder="House 42, Road 7, Shantinagar"
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0DA54F] focus:ring-1 focus:ring-[#0DA54F]"
               />
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {isBn ? 'শহর' : 'City'}
+                City
               </label>
               <input
                 type="text"
@@ -362,7 +354,7 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
           {/* Allergies */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {isBn ? 'এলার্জি সংক্রান্ত তথ্য (কমা দিয়ে আলাদা করুন)' : 'Known Allergies (Comma separated)'}
+              Known Allergies (Comma separated)
             </label>
             <input
               type="text"
@@ -376,7 +368,7 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
           {/* Medical History */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {isBn ? 'ক্লিনিক্যাল হিস্ট্রি ও চিকিৎসা ইতিহাস' : 'Clinical History & Medical Notes'}
+              Clinical History &amp; Medical Notes
             </label>
             <textarea
               rows={3}
@@ -393,18 +385,18 @@ export const PatientEditModal: React.FC<PatientEditModalProps> = ({
               type="button"
               onClick={onClose}
               disabled={isSubmitting}
-              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition-all cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
             >
-              {isBn ? 'বাতিল' : 'Cancel'}
+              Cancel
             </button>
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold text-white bg-[#0DA54F] hover:bg-[#0b8841] rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold text-white bg-[#0DA54F] hover:bg-[#0b8841] rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{isSubmitting ? (isBn ? 'সংরক্ষণ হচ্ছে...' : 'Saving...') : (isBn ? 'স্থায়ীভাবে সেভ করুন' : 'Save Changes')}</span>
+              <span>{isSubmitting ? 'Saving...' : 'Save Changes'}</span>
             </button>
           </div>
         </form>

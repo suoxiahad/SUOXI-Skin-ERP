@@ -23,7 +23,11 @@ import {
   resolveSessionFromRequest,
 } from '../auth/productionAuth.ts';
 import { runWithAuthContext } from '../auth/requestContext.ts';
-import { canUserAccessBranch } from '../auth/rbacMiddleware.ts';
+import {
+  canUserAccessBranch,
+  ROLE_DEFAULT_PERMISSIONS,
+  resolveEffectivePermissions,
+} from '../auth/rbacMiddleware.ts';
 import { getOrSetCache, invalidateCachePrefixes } from '../cache/dashboardCache.ts';
 import { checkRedisHealth, isRedisConfigured } from '../cache/redisClient.ts';
 import { isHostedFallbackWithoutDb } from '../config/securityConfig.ts';
@@ -190,6 +194,22 @@ export function createPhase4AuthMiddleware(options?: {
   };
 }
 
+async function attachEffectivePermissions(user: User): Promise<User> {
+  if (isPostgresConfigured()) {
+    try {
+      const perms = await resolveEffectivePermissions(user);
+      return { ...user, permissions: Array.from(perms) };
+    } catch {
+      // Fallback to static role defaults below
+    }
+  }
+  const merged = new Set<string>([
+    ...(ROLE_DEFAULT_PERMISSIONS[user.role] || []),
+    ...(user.permissions || []),
+  ]);
+  return { ...user, permissions: Array.from(merged) };
+}
+
 export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Router {
   const router = express.Router();
 
@@ -230,14 +250,15 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
   router.get('/api/v1/ready', handleReadiness);
   router.get('/readyz', handleReadiness);
 
-  router.get('/api/v1/auth/me', (req, res) => {
+  router.get('/api/v1/auth/me', async (req, res) => {
     const authed = req as AuthedRequest;
     if (isProductionAuthEnabled()) {
       if (!authed.authUser) {
         return sendPgError(res, 401, 'AUTH_REQUIRED', 'Not authenticated');
       }
+      const hydratedUser = await attachEffectivePermissions(authed.authUser);
       return sendPgSuccess(res, {
-        user: authed.authUser,
+        user: hydratedUser,
         authMode: 'production_session',
         allowRoleSwitcher: isDemoRoleSwitcherAllowed(),
       });
@@ -249,16 +270,18 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
       if (!previewUser) {
         return sendPgError(res, 401, 'AUTH_REQUIRED', 'Not authenticated');
       }
+      const hydratedUser = await attachEffectivePermissions(previewUser);
       return sendPgSuccess(res, {
-        user: previewUser,
+        user: hydratedUser,
         authMode: 'preview_demo',
         allowRoleSwitcher: isDemoRoleSwitcherAllowed(),
       });
     }
 
     // Fallback when no preview session manager is wired
+    const hydratedUser = await attachEffectivePermissions(authed.authUser || deps.getFallbackUser());
     return sendPgSuccess(res, {
-      user: authed.authUser || deps.getFallbackUser(),
+      user: hydratedUser,
       authMode: 'preview_demo',
       allowRoleSwitcher: true,
     });
@@ -299,8 +322,9 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
           `${PREVIEW_SESSION_COOKIE_NAME}=${encodeURIComponent(previewSid)}; ${buildPreviewCookieAttributes(req, 8 * 60 * 60)}`
         );
 
+        const hydratedUser = await attachEffectivePermissions(result.user);
         return sendPgSuccess(res, {
-          user: result.user,
+          user: hydratedUser,
           mustChangePassword: false,
           expiresAt,
           authMode: 'preview_demo',
@@ -323,8 +347,9 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
         req,
         res,
       });
+      const hydratedUser = await attachEffectivePermissions(session.user);
       return sendPgSuccess(res, {
-        user: session.user,
+        user: hydratedUser,
         mustChangePassword: session.mustChangePassword,
         expiresAt: session.expiresAt,
         authMode: 'production_session',
@@ -457,9 +482,19 @@ export function createPhase4PlatformRouter(deps: Phase4RouterDeps): express.Rout
     }
 
     // Mode B: multipart/form-data upload (field: "file")
-    uploadMiddleware.single('file')(req, res, async (multerErr) => {
+    const runSingleUpload = uploadMiddleware.single('file') as unknown as (
+      request: Request,
+      response: Response,
+      callback: (err?: unknown) => void
+    ) => void;
+    runSingleUpload(req, res, async (multerErr) => {
       if (multerErr) {
-        return sendPgError(res, 400, 'UPLOAD_ERROR', multerErr.message);
+        return sendPgError(
+          res,
+          400,
+          'UPLOAD_ERROR',
+          multerErr instanceof Error ? multerErr.message : 'File upload failed'
+        );
       }
       const file = (req as Request & { file?: Express.Multer.File }).file;
       if (!file) {

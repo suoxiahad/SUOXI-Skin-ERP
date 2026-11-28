@@ -863,5 +863,161 @@ export interface ActiveSessionRecord {
   isCurrentSession: boolean;
 }
 
+// =========================================================================
+// Clinic Store (Internal Non-Sellable Supplies, Instruments & Hygiene)
+// =========================================================================
+
+export type StoreItemCategory =
+  | 'Clinical & Hygiene Consumables'
+  | 'Clinical Instruments & Tools'
+  | 'Office & Front-Desk Supplies';
+
+export type StoreItemUnit =
+  | 'pieces'
+  | 'boxes'
+  | 'bottles'
+  | 'packs'
+  | 'reams'
+  | 'sets'
+  | 'rolls';
+
+export interface StoreItem {
+  id: string;
+  itemCode: string;
+  name: string;
+  category: StoreItemCategory;
+  subCategory?: string;
+  unit: StoreItemUnit;
+  currentStock: number;
+  reorderLevel: number;
+  unitCostBDT: number;
+  vendorName?: string;
+  storageLocation?: string;
+  isSellable: false;
+  branchId: string;
+  branchName: string;
+  status: 'in_stock' | 'low_stock' | 'out_of_stock';
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoreRequisitionItem {
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  category: StoreItemCategory;
+  unit: StoreItemUnit;
+  requestedQty: number;
+  approvedQty: number;
+  issuedQty: number;
+  unitCostBDT: number;
+}
+
+export type StoreRequisitionStatus =
+  | 'pending'
+  | 'approved'
+  | 'partially_issued'
+  | 'issued'
+  | 'received'
+  | 'rejected';
+
+export interface StoreRequisition {
+  id: string;
+  reqNumber: string;
+  department: string;
+  roomNumber?: string;
+  priority: 'normal' | 'urgent';
+  status: StoreRequisitionStatus;
+  requestedById: string;
+  requestedByName: string;
+  requestedByRole: UserRole;
+  approvedByName?: string;
+  approvedAt?: string;
+  issuedByName?: string;
+  issuedAt?: string;
+  receivedByName?: string;
+  receivedAt?: string;
+  rejectionReason?: string;
+  notes?: string;
+  items: StoreRequisitionItem[];
+  totalEstimatedCostBDT: number;
+  branchId: string;
+  branchName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InstrumentCondition = 'good' | 'in_use' | 'under_repair' | 'damaged' | 'retired';
+export type InstrumentCustodyStatus = 'in_store' | 'assigned' | 'maintenance' | 'retired';
+
+export interface StoreInstrument {
+  id: string;
+  assetTag: string;
+  itemId?: string;
+  name: string;
+  category: string;
+  serialNumber?: string;
+  condition: InstrumentCondition;
+  custodyStatus: InstrumentCustodyStatus;
+  assignedRoom?: string;
+  assignedToUserId?: string;
+  assignedToUserName?: string;
+  assignedAt?: string;
+  purchaseCostBDT: number;
+  lastServiceDate?: string;
+  notes?: string;
+  branchId: string;
+  branchName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StoreMovementType =
+  | 'stock_in'
+  | 'internal_issue'
+  | 'instrument_assign'
+  | 'instrument_return'
+  | 'damaged'
+  | 'expired'
+  | 'wastage'
+  | 'audit_correction';
+
+export interface StoreLedgerEntry {
+  id: string;
+  itemId?: string;
+  itemCode?: string;
+  itemName: string;
+  category: string;
+  movementType: StoreMovementType;
+  quantityDelta: number;
+  balanceAfter: number;
+  unitCostBDT: number;
+  totalValueBDT: number;
+  department?: string;
+  roomNumber?: string;
+  referenceNo?: string;
+  reason: string;
+  performedByName: string;
+  branchId: string;
+  branchName: string;
+  createdAt: string;
+}
+
+export interface StoreLedgerSummary {
+  totalStockValuationBDT: number;
+  monthlyConsumptionBDT: number;
+  monthlyStockInBDT: number;
+  totalItemsCount: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  instrumentsTotalCount: number;
+  instrumentsAssignedCount: number;
+  instrumentsUnderRepairCount: number;
+  pendingRequisitionsCount: number;
+  departmentCosts: Array<{ department: string; costBDT: number; issueCount: number }>;
+  categoryCosts: Array<{ category: string; stockValueBDT: number; monthlyIssueBDT: number }>;
+}
+
 
 
